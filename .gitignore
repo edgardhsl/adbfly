@@ -1,0 +1,9 @@
+node_modules/
+.next/
+out/
+src-tauri/target/
+src-tauri/Cargo.lock
+*.log
+.DS_Store
+.env
+.env.local

@@ -1,0 +1,29 @@
+[package]
+name = "adb-device-explorer"
+version = "0.1.0"
+description = "Android Device Explorer - Browse and manage device data via ADB"
+authors = ["EdgarHS <edgardhsl@gmail.com>"]
+edition = "2021"
+repository = "https://github.com/edgardhsl/adb-device-explorer"
+
+[lib]
+name = "adb_device_explorer_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["devtools"] }
+tauri-plugin-shell = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.31", features = ["bundled"] }
+tempfile = "3"
+log = "0.4"
+env_logger = "0.11"
+tokio = { version = "1", features = ["process", "fs", "rt-multi-thread"] }
+lazy_static = "1.4"
+
+[profile.release]
+strip = true
