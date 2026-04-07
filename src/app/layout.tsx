@@ -7,7 +7,7 @@ const manrope = Manrope({ subsets: ["latin"], variable: "--font-headline" });
 const inter = Inter({ subsets: ["latin"], variable: "--font-body" });
 
 export const metadata: Metadata = {
-  title: "ADB Device Explorer",
+  title: "ADB Fly",
   description: "Explore and manage Android device data via ADB",
 };
 

@@ -58,7 +58,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ steps.get_tag.outputs.tag }}
-          releaseName: 'ADB Device Explorer ${{ steps.get_tag.outputs.tag }}'
+          releaseName: 'ADB Fly ${{ steps.get_tag.outputs.tag }}'
           releaseBody: 'See the assets to download this version and install.'
           releaseDraft: true
           prerelease: false

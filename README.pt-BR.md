@@ -1,11 +1,11 @@
-# ADB Device Explorer
+# ADB Fly
 
 <div align="center">
 
-[![Versão](https://img.shields.io/badge/version-0.1.0-blue)](https://github.com/edgardhsl/adb-device-explorer)
-[![Licença](https://img.shields.io/badge/license-MIT-green)](https://github.com/edgardhsl/adb-device-explorer/blob/main/LICENSE)
+[![Versão](https://img.shields.io/badge/version-0.1.0-blue)](https://github.com/edgardhsl/adbfly)
+[![Licença](https://img.shields.io/badge/license-MIT-green)](https://github.com/edgardhsl/adbfly/blob/main/LICENSE)
 
-<img src="./public/images/app.png" alt="ADB Device Explorer - Tema Claro e Escuro" />
+<img src="./public/images/logo.webp" alt="ADB Fly - Tema Claro e Escuro" />
 
 **Navegue e gerencie bancos de dados SQLite em dispositivos Android via ADB**
 
@@ -17,7 +17,7 @@
 
 ## Sobre
 
-ADB Device Explorer é um aplicativo desktop que permite navegar e gerenciar bancos de dados SQLite de apps instalados em dispositivos Android conectados via ADB (Android Debug Bridge).
+ADB Fly é um aplicativo desktop que permite navegar e gerenciar bancos de dados SQLite de apps instalados em dispositivos Android conectados via ADB (Android Debug Bridge).
 
 ---
 
