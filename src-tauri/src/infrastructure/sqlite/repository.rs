@@ -231,7 +231,7 @@ impl SqliteRepository {
         db_name: &str,
         sql: &str,
     ) -> Result<SqlResult, String> {
-        let (temp_dir, local_path) = self.pull_database(device_id, package_name, db_name)?;
+        let (_temp_dir, local_path) = self.pull_database(device_id, package_name, db_name)?;
 
         let conn = rusqlite::Connection::open(&local_path)
             .map_err(|e| format!("Failed to open database: {}", e))?;
