@@ -29,10 +29,18 @@ Please be respectful and inclusive when participating in this project. We expect
 1. Fork the repository
 2. Create a feature branch
 3. Make your changes
-4. Add/update tests if applicable
+4. **Mandatory:** Add/update unit, integration, and regression tests. This is a strict project rule to prevent potential new bugs.
 5. Ensure code follows project conventions
 6. Write clear commit messages
 7. Submit a PR with a detailed description
+
+## Versioning, Branches, and Tags
+
+This project uses an automated semantic versioning and release system powered by GitHub Actions.
+
+1. **Branches:** Feature branches should be merged into the `main` branch via Pull Requests.
+2. **Version Bumps:** When a Pull Request is merged into the `main` branch, a GitHub Action (`anothrNick/github-tag-action`) will automatically analyze the commit messages to determine the next semantic version bump (patch, minor, or major) and generate a new tag (e.g., `v1.0.1`).
+3. **Releases:** After a tag is created, the Release GitHub Action must be triggered **manually**. Go to the Actions tab, select the Release workflow, and click "Run workflow". The action will automatically retrieve the latest generated tag, build the application for multiple platforms (Windows, macOS, Linux) and create a new GitHub Release draft containing the compiled binaries.
 
 ## Development Setup
 
