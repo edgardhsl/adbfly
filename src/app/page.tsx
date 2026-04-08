@@ -582,7 +582,7 @@ function AppContent() {
                                   "px-4 py-2 border-r border-b border-slate-100 dark:border-slate-700/50",
                                   colIdx === 0 && "bg-slate-50/50 dark:bg-slate-800/30 font-semibold text-slate-700 dark:text-slate-300"
                                 )}
-                                onClick={() => handleCellEdit(rowIdx, col, row[col])}
+                                onDoubleClick={() => handleCellEdit(rowIdx, col, row[col])}
                               >
                                 {editingCell?.row === rowIdx && editingCell?.col === col ? (
                                   <div className="flex items-center border-2 border-primary rounded-lg bg-surface-container-lowest shadow-lg shadow-primary/10 p-0.5">
@@ -597,12 +597,14 @@ function AppContent() {
                                       autoFocus
                                     />
                                     <button 
+                                      type="button"
                                       onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleCellSave(); }}
                                       className="w-6 h-6 flex items-center justify-center rounded bg-primary text-white hover:bg-primary/90"
                                     >
                                       <Check className="w-3 h-3" />
                                     </button>
                                     <button 
+                                      type="button"
                                       onClick={(e) => { e.stopPropagation(); setEditingCell(null); }}
                                       className="w-6 h-6 flex items-center justify-center rounded bg-slate-100 dark:bg-slate-700 text-slate-400 dark:text-slate-500 hover:bg-slate-200 dark:hover:bg-slate-600"
                                     >
