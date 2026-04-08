@@ -225,7 +225,7 @@ function AppContent() {
           {/* Brand */}
           <div className="px-6 mb-10">
             <div className="flex items-center gap-3">
-              <Database className="w-7 h-7 text-indigo-600 dark:text-indigo-400" />
+              <img src="/images/logo.png" alt="ADB Fly" className="w-8 h-8" />
               <h1 className="text-xl font-bold tracking-tighter text-indigo-600 dark:text-indigo-400">{t.app.title}</h1>
             </div>
             <p className="text-[10px] text-slate-400 mt-1 uppercase tracking-widest">
