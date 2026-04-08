@@ -2,6 +2,6 @@
 
 fn main() {
     env_logger::init();
-    log::info!("Starting ADB Device Explorer");
+    log::info!("Starting ADB Fly");
     adb_device_explorer_lib::run();
 }

@@ -1,4 +1,4 @@
-# Contributing to ADB Device Explorer
+# Contributing to ADB Fly
 
 Thank you for your interest in contributing!
 
@@ -46,8 +46,8 @@ This project uses an automated semantic versioning and release system powered by
 
 ```bash
 # Clone and install
-git clone https://github.com/edgardhsl/adb-device-explorer.git
-cd adb-device-explorer
+git clone https://github.com/edgardhsl/adbfly.git
+cd adbfly
 npm install
 
 # Run development

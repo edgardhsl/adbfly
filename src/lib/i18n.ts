@@ -1,7 +1,7 @@
 export const translations = {
   "pt-BR": {
     app: {
-      title: "ADB Device Explorer",
+      title: "ADB Fly",
       version: "v2.4.0",
       connected: "Conectado",
       disconnected: "Desconectado",
@@ -57,7 +57,7 @@ export const translations = {
   },
   "en": {
     app: {
-      title: "ADB Device Explorer",
+      title: "ADB Fly",
       version: "v2.4.0",
       connected: "Connected",
       disconnected: "Disconnected",
@@ -113,7 +113,7 @@ export const translations = {
   },
   es: {
     app: {
-      title: "ADB Device Explorer",
+      title: "ADB Fly",
       version: "v2.4.0",
       connected: "Conectado",
       disconnected: "Desconectado",
