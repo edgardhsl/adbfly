@@ -7,7 +7,8 @@ import type {
   TableData, 
   SqlResult,
   SortInfo,
-  FilterInfo
+  FilterInfo,
+  DeviceOverview
 } from './types';
 
 export async function listDevices(): Promise<Device[]> {
@@ -16,6 +17,10 @@ export async function listDevices(): Promise<Device[]> {
 
 export async function listPackages(deviceId: string): Promise<Package[]> {
   return invoke('list_packages', { deviceId });
+}
+
+export async function getDeviceOverview(deviceId: string): Promise<DeviceOverview> {
+  return invoke('get_device_overview', { deviceId });
 }
 
 export async function listDatabases(deviceId: string, packageName: string): Promise<DatabaseInfo[]> {
@@ -32,7 +37,12 @@ export async function getTableSchema(
   dbName: string, 
   table: string
 ): Promise<TableSchema> {
-  return invoke('get_table_schema', { deviceId, packageName, dbName, table });
+  return invoke('get_table_schema', {
+    deviceId,
+    packageName,
+    dbName,
+    table,
+  });
 }
 
 export async function getTableData(
@@ -45,15 +55,15 @@ export async function getTableData(
   sort?: SortInfo,
   filters?: FilterInfo[]
 ): Promise<TableData> {
-  return invoke('get_table_data', { 
-    deviceId, 
-    packageName, 
-    dbName, 
-    table, 
-    page, 
-    pageSize, 
-    sort, 
-    filters 
+  return invoke('get_table_data', {
+    deviceId,
+    packageName,
+    dbName,
+    table,
+    page,
+    pageSize,
+    sort,
+    filters,
   });
 }
 
@@ -63,7 +73,12 @@ export async function executeSql(
   dbName: string,
   sql: string
 ): Promise<SqlResult> {
-  return invoke('execute_sql', { deviceId, packageName, dbName, sql });
+  return invoke('execute_sql', {
+    deviceId,
+    packageName,
+    dbName,
+    sql,
+  });
 }
 
 export async function syncChanges(
@@ -71,5 +86,9 @@ export async function syncChanges(
   packageName: string,
   dbName: string
 ): Promise<void> {
-  return invoke('sync_changes', { deviceId, packageName, dbName });
+  return invoke('sync_changes', {
+    deviceId,
+    packageName,
+    dbName,
+  });
 }
