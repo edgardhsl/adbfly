@@ -1,0 +1,4 @@
+# Copy this file to adbfly.ini and adjust paths as needed.
+openssl_dir=C:\OpenSSL-Win64
+openssl_lib_dir=C:\OpenSSL-Win64\lib
+openssl_include_dir=C:\OpenSSL-Win64\include

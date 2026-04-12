@@ -79,14 +79,16 @@ El ejecutable estará en `src-tauri/target/release/`
 
 El proyecto usa SQLCipher vía `rusqlite` sin OpenSSL vendorizado, así que **no requiere Perl** para compilar.
 
-En Windows, define OpenSSL en variables de entorno antes de `tauri:dev`/`tauri:build`:
+En Windows, configura OpenSSL en la app (pantalla **Configuración**) y ejecuta:
 
 ```powershell
-$env:OPENSSL_DIR="C:\OpenSSL-Win64"
-$env:OPENSSL_LIB_DIR="$env:OPENSSL_DIR\lib"
-$env:OPENSSL_INCLUDE_DIR="$env:OPENSSL_DIR\include"
 npm run tauri:dev
 ```
+
+El runner de Tauri carga automáticamente `OPENSSL_*` desde:
+- `%APPDATA%\com.adbfly.app\adbfly.ini`
+
+En el primer arranque (antes de que la UI esté disponible), puedes crear `adbfly.ini` en la raíz del proyecto a partir de `adbfly.ini.example`.
 
 ---
 

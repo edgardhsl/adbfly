@@ -16,9 +16,9 @@
     "design:audit": "impeccable detect src/app/page.tsx src/app/globals.css src/components/ui",
     "design:audit:fast": "impeccable detect --fast src/",
     "design:live": "impeccable live",
-    "tauri": "tauri",
-    "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build",
+    "tauri": "node scripts/tauri-runner.js",
+    "tauri:dev": "node scripts/tauri-runner.js dev",
+    "tauri:build": "node scripts/tauri-runner.js build",
     "tauri:icon": "tauri icon public/images/logo.webp"
   },
   "dependencies": {
