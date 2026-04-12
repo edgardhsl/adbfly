@@ -58,15 +58,25 @@ function run() {
   console.log("Starting Tauri with SQLCipher (Rust OpenSSL vendored path).");
   console.log("Note: first build requires C toolchain, perl and make.");
 
-  const npxCmd = process.platform === "win32" ? "npx.cmd" : "npx";
-  const fullArgs = ["tauri", ...tauriArgs];
-  fullArgs.push("--features", "sqlcipher");
+  const fullArgs = ["tauri", ...tauriArgs, "--features", "sqlcipher"];
 
-  const child = spawn(npxCmd, fullArgs, {
-    stdio: "inherit",
-    env,
-    cwd: process.cwd(),
-  });
+  let child;
+  if (process.platform === "win32") {
+    const quote = (value) => `"${String(value).replace(/"/g, '\\"')}"`;
+    const command = ["npx", ...fullArgs].map(quote).join(" ");
+    child = spawn("cmd.exe", ["/d", "/s", "/c", command], {
+      stdio: "inherit",
+      env,
+      cwd: process.cwd(),
+      windowsVerbatimArguments: true,
+    });
+  } else {
+    child = spawn("npx", fullArgs, {
+      stdio: "inherit",
+      env,
+      cwd: process.cwd(),
+    });
+  }
 
   child.on("exit", (code) => process.exit(code ?? 1));
 }
