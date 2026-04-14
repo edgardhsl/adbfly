@@ -10,6 +10,7 @@
   },
   "scripts": {
     "dev": "next dev",
+    "dev:tauri": "node --max-old-space-size=2048 ./node_modules/next/dist/bin/next dev --webpack --port 3000",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
