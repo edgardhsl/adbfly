@@ -120,7 +120,7 @@ export function WorkspaceSidebar({
           <div>
             <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500 dark:text-slate-400">{t.sidebar.devices}</p>
             <Select
-              value={selectedDevice ?? undefined}
+              value={selectedDevice ?? ""}
               onValueChange={onSelectDevice}
               disabled={devices.length === 0}
             >
@@ -176,7 +176,7 @@ export function WorkspaceSidebar({
             {hasDeviceSelected && (
               <div className="space-y-1">
                 <Select
-                  value={selectedPackage ?? undefined}
+                  value={selectedPackage ?? ""}
                   onValueChange={onSelectPackage}
                   disabled={filteredPackages.length === 0}
                 >
