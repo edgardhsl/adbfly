@@ -3,7 +3,7 @@ use crate::domain::entities::{FilterInfo, SortInfo};
 use std::env;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tauri::{AppHandle, Manager, State};
 
 pub struct AppState {
@@ -20,7 +20,7 @@ impl AppState {
     }
 }
 
-pub type SharedAppState = Arc<Mutex<AppState>>;
+pub type SharedAppState = Arc<AppState>;
 
 async fn run_with_state<T, F>(state: State<'_, SharedAppState>, task: F) -> Result<T, String>
 where
@@ -28,10 +28,7 @@ where
     F: FnOnce(&AppState) -> Result<T, String> + Send + 'static,
 {
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let guard = state.lock().map_err(|e| e.to_string())?;
-        task(&guard)
-    })
+    tauri::async_runtime::spawn_blocking(move || task(state.as_ref()))
     .await
     .map_err(|e| e.to_string())?
 }
@@ -205,25 +202,59 @@ fn apply_openssl_env(config: &crate::domain::entities::AppConfig) {
     }
 }
 
+fn default_app_config(config_path: PathBuf) -> crate::domain::entities::AppConfig {
+    crate::domain::entities::AppConfig {
+        openssl_dir: String::new(),
+        openssl_lib_dir: String::new(),
+        openssl_include_dir: String::new(),
+        preferred_locale: "en".to_string(),
+        config_file_path: config_path.to_string_lossy().to_string(),
+    }
+}
+
+fn write_app_config_ini(config: &crate::domain::entities::AppConfig) -> Result<(), String> {
+    let ini_content = format!(
+        "# ADB Fly configuration\nopenssl_dir={}\nopenssl_lib_dir={}\nopenssl_include_dir={}\npreferred_locale={}\n",
+        config.openssl_dir, config.openssl_lib_dir, config.openssl_include_dir, config.preferred_locale
+    );
+    fs::write(&config.config_file_path, ini_content)
+        .map_err(|e| format!("Failed to save config file: {}", e))
+}
+
+pub fn ensure_app_config_exists(app: &AppHandle) -> Result<crate::domain::entities::AppConfig, String> {
+    let config_path = app_config_file_path(app)?;
+
+    if let Some(parent) = config_path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create config directory: {}", e))?;
+    }
+
+    if config_path.exists() {
+        let content = fs::read_to_string(&config_path).unwrap_or_default();
+        let config = crate::domain::entities::AppConfig {
+            openssl_dir: parse_ini_value(&content, "openssl_dir"),
+            openssl_lib_dir: parse_ini_value(&content, "openssl_lib_dir"),
+            openssl_include_dir: parse_ini_value(&content, "openssl_include_dir"),
+            preferred_locale: {
+                let locale = parse_ini_value(&content, "preferred_locale");
+                if locale.is_empty() { "en".to_string() } else { locale }
+            },
+            config_file_path: config_path.to_string_lossy().to_string(),
+        };
+
+        apply_openssl_env(&config);
+        return Ok(config);
+    }
+
+    let config = default_app_config(config_path);
+    write_app_config_ini(&config)?;
+    apply_openssl_env(&config);
+    Ok(config)
+}
+
 #[tauri::command]
 pub async fn get_app_config(app: AppHandle) -> Result<crate::domain::entities::AppConfig, String> {
-    let config_path = app_config_file_path(&app)?;
-    let content = fs::read_to_string(&config_path).unwrap_or_default();
-
-    let config = crate::domain::entities::AppConfig {
-        openssl_dir: parse_ini_value(&content, "openssl_dir"),
-        openssl_lib_dir: parse_ini_value(&content, "openssl_lib_dir"),
-        openssl_include_dir: parse_ini_value(&content, "openssl_include_dir"),
-        preferred_locale: {
-            let locale = parse_ini_value(&content, "preferred_locale");
-            if locale.is_empty() { "en".to_string() } else { locale }
-        },
-        config_file_path: config_path.to_string_lossy().to_string(),
-    };
-
-    apply_openssl_env(&config);
-
-    Ok(config)
+    ensure_app_config_exists(&app)
 }
 
 #[tauri::command]
@@ -255,16 +286,7 @@ pub async fn save_app_config(
         config_file_path: config_path.to_string_lossy().to_string(),
     };
 
-    let ini_content = format!(
-        "# ADB Fly configuration\nopenssl_dir={}\nopenssl_lib_dir={}\nopenssl_include_dir={}\npreferred_locale={}\n",
-        normalized.openssl_dir,
-        normalized.openssl_lib_dir,
-        normalized.openssl_include_dir,
-        normalized.preferred_locale
-    );
-
-    fs::write(&config_path, ini_content)
-        .map_err(|e| format!("Failed to save config file: {}", e))?;
+    write_app_config_ini(&normalized)?;
 
     apply_openssl_env(&normalized);
 

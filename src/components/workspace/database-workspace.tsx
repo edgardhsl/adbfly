@@ -1,12 +1,12 @@
-import { useEffect, useState } from "react";
-import { Check, ChevronDown, ChevronRight, Database, KeyRound, Layers, PanelLeftClose, PanelLeftOpen, Plus, RefreshCw, Search, TableProperties, Trash2, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import dynamic from "next/dynamic";
+import { Check, ChevronDown, ChevronRight, Database, KeyRound, Layers, ListFilter, PanelLeftClose, PanelLeftOpen, Plus, RefreshCw, TableProperties, Trash2, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
 import {
   Select,
   SelectContent,
@@ -15,10 +15,17 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import type { TranslationKeys } from "@/lib/i18n";
-import type { DatabaseInfo, TableData, TableSchema } from "@/lib/types";
+import type { DatabaseInfo, FilterInfo, TableData, TableSchema } from "@/lib/types";
 import { cn, getValueLabel } from "@/lib/utils";
 import type { Theme } from "@/lib/types";
 import type { Dispatch, SetStateAction } from "react";
+const DatabaseSchemaDiagram = dynamic(
+  () => import("@/components/workspace/database-schema-diagram").then((module) => module.DatabaseSchemaDiagram),
+  { ssr: false }
+);
+
+const TABLE_ROW_HEIGHT = 42;
+const TABLE_OVERSCAN = 10;
 
 type DatabaseWorkspaceProps = {
   theme: Theme;
@@ -33,6 +40,7 @@ type DatabaseWorkspaceProps = {
   tablesError: boolean;
   fetchingDbs: boolean;
   selectedDb: string | null;
+  requiresSqlCipherKey: boolean;
   databaseKey: string;
   onApplyDatabaseKey: (key: string) => void;
   expandedDbs: Set<string>;
@@ -42,11 +50,13 @@ type DatabaseWorkspaceProps = {
   selectedTable: string | null;
   tableData: TableData | null | undefined;
   tableSchema: TableSchema | null | undefined;
-  filterColumn: string;
-  onFilterColumnChange: (value: string) => void;
-  filterInput: string;
-  onFilterInputChange: (value: string) => void;
-  onApplyFilter: () => void;
+  diagramSchemas: Record<string, TableSchema>;
+  diagramLoading: boolean;
+  onOpenDiagram: () => void;
+  filters: FilterInfo[];
+  onAddFilter: (filter: FilterInfo) => void;
+  onRemoveFilter: (index: number) => void;
+  onClearFilters: () => void;
   isAddingInlineRow: boolean;
   newRowData: Record<string, string>;
   onAddRowOpen: () => void;
@@ -92,6 +102,7 @@ export function DatabaseWorkspace({
   tablesError,
   fetchingDbs,
   selectedDb,
+  requiresSqlCipherKey,
   databaseKey,
   onApplyDatabaseKey,
   expandedDbs,
@@ -101,11 +112,13 @@ export function DatabaseWorkspace({
   selectedTable,
   tableData,
   tableSchema,
-  filterColumn,
-  onFilterColumnChange,
-  filterInput,
-  onFilterInputChange,
-  onApplyFilter,
+  diagramSchemas,
+  diagramLoading,
+  onOpenDiagram,
+  filters,
+  onAddFilter,
+  onRemoveFilter,
+  onClearFilters,
   isAddingInlineRow,
   newRowData,
   onAddRowOpen,
@@ -140,11 +153,156 @@ export function DatabaseWorkspace({
   const [isSchemaSidebarCollapsed, setIsSchemaSidebarCollapsed] = useState(false);
   const [confirmDeleteRowIndex, setConfirmDeleteRowIndex] = useState<number | null>(null);
   const [confirmDiscardPending, setConfirmDiscardPending] = useState(false);
+  const [isDiagramOpen, setIsDiagramOpen] = useState(false);
+  const [isFiltersModalOpen, setIsFiltersModalOpen] = useState(false);
   const [dbKeyInput, setDbKeyInput] = useState(databaseKey);
+  const [newFilterColumn, setNewFilterColumn] = useState("");
+  const [newFilterValue, setNewFilterValue] = useState("");
+  const [filtersLaneEl, setFiltersLaneEl] = useState<HTMLDivElement | null>(null);
+  const [manageFiltersButtonEl, setManageFiltersButtonEl] = useState<HTMLButtonElement | null>(null);
+  const [clearFiltersButtonEl, setClearFiltersButtonEl] = useState<HTMLButtonElement | null>(null);
+  const [visibleFilterCount, setVisibleFilterCount] = useState<number>(filters.length);
+  const [tableViewportEl, setTableViewportEl] = useState<HTMLDivElement | null>(null);
+  const [tableScrollTop, setTableScrollTop] = useState(0);
+  const [tableViewportHeight, setTableViewportHeight] = useState(420);
+  const filterChipMeasureRefs = useRef<Array<HTMLSpanElement | null>>([]);
 
   useEffect(() => {
     setDbKeyInput(databaseKey);
   }, [databaseKey, selectedDb]);
+
+  useEffect(() => {
+    filterChipMeasureRefs.current = filterChipMeasureRefs.current.slice(0, filters.length);
+  }, [filters.length]);
+
+  useEffect(() => {
+    if (!tableViewportEl) return;
+
+    const updateMetrics = () => {
+      setTableViewportHeight(tableViewportEl.clientHeight || 420);
+      setTableScrollTop(tableViewportEl.scrollTop);
+    };
+
+    updateMetrics();
+    tableViewportEl.addEventListener("scroll", updateMetrics, { passive: true });
+
+    const observer = new ResizeObserver(updateMetrics);
+    observer.observe(tableViewportEl);
+
+    return () => {
+      tableViewportEl.removeEventListener("scroll", updateMetrics);
+      observer.disconnect();
+    };
+  }, [tableViewportEl]);
+
+  useEffect(() => {
+    if (!tableViewportEl) return;
+    tableViewportEl.scrollTop = 0;
+    setTableScrollTop(0);
+  }, [tableViewportEl, selectedTable, page, pageSize]);
+
+  const hiddenFiltersCount = Math.max(0, filters.length - visibleFilterCount);
+
+  const totalRows = tableData?.rows.length ?? 0;
+  const virtualWindow = useMemo(() => {
+    if (!tableData || totalRows === 0) {
+      return {
+        start: 0,
+        end: 0,
+        paddingTop: 0,
+        paddingBottom: 0,
+      };
+    }
+
+    const firstVisible = Math.floor(tableScrollTop / TABLE_ROW_HEIGHT);
+    const visibleCount = Math.ceil(tableViewportHeight / TABLE_ROW_HEIGHT);
+    const start = Math.max(0, firstVisible - TABLE_OVERSCAN);
+    const end = Math.min(totalRows, firstVisible + visibleCount + TABLE_OVERSCAN);
+
+    return {
+      start,
+      end,
+      paddingTop: start * TABLE_ROW_HEIGHT,
+      paddingBottom: Math.max(0, (totalRows - end) * TABLE_ROW_HEIGHT),
+    };
+  }, [tableData, tableScrollTop, tableViewportHeight, totalRows]);
+
+  const visibleRows = useMemo(() => {
+    if (!tableData || totalRows === 0) return [];
+
+    return tableData.rows
+      .slice(virtualWindow.start, virtualWindow.end)
+      .map((row, index) => ({ row, rowIdx: virtualWindow.start + index }));
+  }, [tableData, totalRows, virtualWindow.end, virtualWindow.start]);
+
+  const hiddenFiltersChipLabel = useMemo(
+    () => `${hiddenFiltersCount} ${t.toolbar.filtersCountSuffix}`,
+    [hiddenFiltersCount, t.toolbar.filtersCountSuffix]
+  );
+
+  useEffect(() => {
+    if (!filtersLaneEl || !manageFiltersButtonEl) return;
+
+    const gapPx = 8;
+    const estimateSummaryWidth = (hiddenCount: number) => {
+      const text = `${hiddenCount} ${t.toolbar.filtersCountSuffix}`;
+      return Math.max(78, 36 + text.length * 7);
+    };
+
+    const calculateVisibleFilters = () => {
+      if (!filters.length) {
+        setVisibleFilterCount(0);
+        return;
+      }
+
+      const laneWidth = filtersLaneEl.clientWidth;
+      const manageWidth = manageFiltersButtonEl.offsetWidth;
+      const clearWidth = clearFiltersButtonEl?.offsetWidth ?? 0;
+      const fixedWidth = manageWidth + clearWidth + gapPx * 2;
+      const availableForChips = Math.max(0, laneWidth - fixedWidth);
+      const chipWidths = filters.map((_, index) => filterChipMeasureRefs.current[index]?.offsetWidth ?? 120);
+
+      let count = 0;
+      let used = 0;
+      for (let index = 0; index < chipWidths.length; index += 1) {
+        const next = chipWidths[index];
+        const projected = used + (count > 0 ? gapPx : 0) + next;
+        if (projected > availableForChips) break;
+        used = projected;
+        count += 1;
+      }
+
+      if (count >= filters.length) {
+        setVisibleFilterCount(filters.length);
+        return;
+      }
+
+      let adjusted = count;
+      while (adjusted >= 0) {
+        const visibleWidths = chipWidths.slice(0, adjusted);
+        const visibleUsed = visibleWidths.reduce((sum, width, index) => sum + width + (index > 0 ? gapPx : 0), 0);
+        const hiddenCount = filters.length - adjusted;
+        const summaryWidth = estimateSummaryWidth(hiddenCount);
+        const projected = visibleUsed + (adjusted > 0 ? gapPx : 0) + summaryWidth;
+        if (projected <= availableForChips) break;
+        adjusted -= 1;
+      }
+
+      setVisibleFilterCount(Math.max(0, adjusted));
+    };
+
+    calculateVisibleFilters();
+
+    const observer = new ResizeObserver(() => {
+      calculateVisibleFilters();
+    });
+
+    observer.observe(filtersLaneEl);
+    observer.observe(manageFiltersButtonEl);
+    if (clearFiltersButtonEl) observer.observe(clearFiltersButtonEl);
+
+    return () => observer.disconnect();
+  }, [clearFiltersButtonEl, filters, filtersLaneEl, manageFiltersButtonEl, t.toolbar.filtersCountSuffix]);
 
   if (!canOpenDatabases) {
     return (
@@ -162,7 +320,7 @@ export function DatabaseWorkspace({
   }
 
   return (
-    <div className="space-y-4">
+    <div className="flex h-full min-h-0 flex-col gap-3">
       <div className="flex items-center gap-2">
         <Button
           type="button"
@@ -179,16 +337,29 @@ export function DatabaseWorkspace({
           {isSchemaSidebarCollapsed ? <PanelLeftOpen className="mr-1 h-4 w-4" /> : <PanelLeftClose className="mr-1 h-4 w-4" />}
           {t.sidebar.schemaExplorer}
         </Button>
+        {selectedDb && (
+          <Button
+            variant="secondary"
+            onClick={() => {
+              onOpenDiagram();
+              setIsDiagramOpen(true);
+            }}
+            className={cn("h-8 shrink-0 rounded-lg px-3 text-xs", theme === "dark" ? "border border-white/10 bg-white/10 text-zinc-100 hover:bg-white/15" : "border border-slate-300 bg-white text-slate-700 hover:bg-slate-100")}
+          >
+            <Database className="mr-1 h-4 w-4" />
+            {t.toolbar.viewDiagram}
+          </Button>
+        )}
       </div>
 
-      <div className={cn("grid gap-4", isSchemaSidebarCollapsed ? "grid-cols-1" : "grid-cols-[280px_minmax(0,1fr)]")}>
+      <div className={cn("grid min-h-0 flex-1 gap-3", isSchemaSidebarCollapsed ? "grid-cols-1" : "grid-cols-[270px_minmax(0,1fr)]")}>
         {!isSchemaSidebarCollapsed && (
           <Card className="overflow-hidden border-border bg-surface backdrop-blur-xl">
-            <CardHeader className="space-y-1 border-b border-border">
+            <CardHeader className="space-y-1 border-b border-border px-4 py-3">
               <CardTitle className={cn("text-sm", theme === "dark" ? "text-zinc-100" : "text-slate-900")}>{t.sidebar.schemaExplorer}</CardTitle>
               <CardDescription className={cn("text-xs", theme === "dark" ? "text-zinc-400" : "text-slate-600")}>{t.sidebar.schemaExplorerDescription}</CardDescription>
             </CardHeader>
-            <CardContent className="p-3">
+            <CardContent className="p-2.5">
               {!selectedPackage && (
                 <p className={cn("rounded-xl border p-3 text-[11px]", theme === "dark" ? "border-white/10 text-zinc-400" : "border-slate-200 text-slate-600")}>
                   {t.main.lockSelectAppPackage}
@@ -200,7 +371,7 @@ export function DatabaseWorkspace({
                   <div className={cn("rounded-xl border px-2 py-2 text-[11px] font-mono", theme === "dark" ? "border-white/10 text-zinc-300" : "border-slate-200 text-slate-700")}>
                     {selectedPackage}
                   </div>
-                  {selectedDb && (
+                  {selectedDb && requiresSqlCipherKey && (
                     <div className={cn("space-y-2 rounded-xl border p-2", theme === "dark" ? "border-white/10 bg-white/5" : "border-slate-200 bg-slate-50")}>
                       <p className={cn("text-[10px] font-semibold uppercase tracking-[0.08em]", theme === "dark" ? "text-zinc-400" : "text-slate-600")}>
                         {t.sidebar.sqlCipherKey}
@@ -303,60 +474,72 @@ export function DatabaseWorkspace({
           </Card>
         )}
 
-        <div className="min-w-0 space-y-4">
+        <div className="min-w-0 min-h-0 flex flex-col gap-3">
       {!selectedTable && (
         <Card className="border-border bg-surface backdrop-blur-xl">
-          <CardContent className={cn("py-12 text-center", theme === "dark" ? "text-zinc-300" : "text-slate-600")}>{t.main.selectTableFromSidebar}</CardContent>
+          <CardContent className={cn("py-10 text-center", theme === "dark" ? "text-zinc-300" : "text-slate-600")}>{t.main.selectTableFromSidebar}</CardContent>
         </Card>
       )}
 
       {selectedTable && tableData && (
         <>
-          <div className="rounded-2xl border border-border bg-surface p-3 backdrop-blur-xl">
-            <div className="flex flex-wrap items-center gap-3">
-              <div
-                className={cn(
-                  "flex min-w-[320px] flex-1 flex-wrap items-center gap-2 rounded-xl border px-2 py-2",
-                  theme === "dark"
-                    ? "border-[#3a3a3a] bg-[#1f1f1f]"
-                    : "border-slate-300/70 bg-white/70"
+          <div className="rounded-xl border border-border bg-surface p-2.5 backdrop-blur-xl">
+            <div className="flex items-center gap-2">
+              <div ref={setFiltersLaneEl} className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
+                <Button
+                  ref={setManageFiltersButtonEl}
+                  variant="secondary"
+                  onClick={() => setIsFiltersModalOpen(true)}
+                  aria-label={t.toolbar.manageFilters}
+                  title={t.toolbar.manageFilters}
+                  className={cn("h-9 w-9 shrink-0 rounded-lg p-0", theme === "dark" ? "border border-[#3a3a3a] bg-[#262626] text-zinc-100 hover:bg-[#2d2d2d]" : "border border-slate-300 bg-white text-slate-700 hover:bg-slate-100")}
+                >
+                  <ListFilter className="h-4 w-4" />
+                </Button>
+
+                {filters.length === 0 && (
+                  <span className={cn("text-xs", theme === "dark" ? "text-zinc-400" : "text-slate-500")}>{t.toolbar.noFiltersApplied}</span>
                 )}
-              >
-                <Search className="ml-1 h-4 w-4 text-slate-400" />
-                <Select value={filterColumn || "__all__"} onValueChange={(value) => onFilterColumnChange(value === "__all__" ? "" : value)}>
-                  <SelectTrigger className={cn("h-8 w-[170px] text-xs", theme === "dark" ? "border-[#3a3a3a] bg-[#2a2a2a] text-zinc-100" : "border-slate-300 bg-white text-slate-700")}>
-                    <SelectValue placeholder={t.toolbar.allColumns} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__all__">{t.toolbar.allColumns}</SelectItem>
-                    {tableData.columns.map((col) => (
-                      <SelectItem key={col} value={col}>{col}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Input
-                  className={cn("h-8 min-w-[220px] flex-1 text-xs", theme === "dark" ? "border-[#3a3a3a] bg-[#2a2a2a] text-zinc-100 placeholder:text-zinc-500" : "border-slate-300 bg-white text-slate-700 placeholder:text-slate-400")}
-                  placeholder={t.toolbar.filterPlaceholder}
-                  value={filterInput}
-                  onChange={(e) => onFilterInputChange(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && onApplyFilter()}
-                />
+
+                {filters.slice(0, visibleFilterCount).map((filter, index) => (
+                  <Badge key={`${filter.column}-${filter.value}-${index}`} variant="secondary" className={cn("shrink-0 gap-1 rounded-full px-2 py-1 text-[11px]", theme === "dark" ? "bg-white/10 text-zinc-200" : "bg-slate-100 text-slate-700")}>
+                    <span className="max-w-[180px] truncate">{filter.column}: {filter.value}</span>
+                    <button type="button" onClick={() => onRemoveFilter(index)} className={cn("rounded-full p-0.5", theme === "dark" ? "hover:bg-white/10" : "hover:bg-slate-200")}>
+                      <X className="h-3 w-3" />
+                    </button>
+                  </Badge>
+                ))}
+
+                {hiddenFiltersCount > 0 && (
+                  <Badge variant="secondary" className={cn("shrink-0 rounded-full px-2 py-1 text-[11px]", theme === "dark" ? "bg-white/10 text-zinc-200" : "bg-slate-100 text-slate-700")}>
+                    {hiddenFiltersChipLabel}
+                  </Badge>
+                )}
+
+                {filters.length > 0 && (
+                  <Button
+                    ref={setClearFiltersButtonEl}
+                    variant="ghost"
+                    onClick={onClearFilters}
+                    aria-label={t.toolbar.clearFilters}
+                    title={t.toolbar.clearFilters}
+                    className={cn("h-8 w-8 shrink-0 rounded-lg p-0", theme === "dark" ? "text-zinc-300 hover:bg-white/10" : "text-slate-600 hover:bg-slate-100")}
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                )}
               </div>
 
-              <Button variant="secondary" onClick={onApplyFilter} className="h-10 rounded-xl bg-white/90 text-slate-900 hover:bg-white dark:border dark:border-[#3a3a3a] dark:bg-[#262626] dark:text-zinc-100 dark:hover:bg-[#2d2d2d]">
-                {t.toolbar.applyFilters}
-              </Button>
-              <Button onClick={onAddRowOpen} disabled={isAddingInlineRow} className="h-10 rounded-xl bg-indigo-500 text-white hover:bg-indigo-400 disabled:opacity-70">
+              <Button onClick={onAddRowOpen} disabled={isAddingInlineRow} className="h-9 shrink-0 rounded-lg bg-indigo-500 px-3 text-xs text-white hover:bg-indigo-400 disabled:opacity-70">
                 <Plus className="mr-1 h-4 w-4" />
-                {t.toolbar.addRow}
+                {t.toolbar.addNew}
               </Button>
-
               {pendingRowsCount > 0 && (
                 <>
-                  <Button onClick={onCommitPendingChanges} disabled={savingPendingRows} className="h-10 rounded-xl bg-emerald-500 text-emerald-950 hover:bg-emerald-400">
+                  <Button onClick={onCommitPendingChanges} disabled={savingPendingRows} className="h-9 rounded-lg bg-emerald-500 px-3 text-xs text-emerald-950 hover:bg-emerald-400">
                     {savingPendingRows ? <RefreshCw className="mr-1 h-4 w-4 animate-spin" /> : <Check className="mr-1 h-4 w-4" />}{t.actions.save} ({pendingRowsCount})
                   </Button>
-                  <Button variant="secondary" onClick={() => setConfirmDiscardPending(true)} disabled={savingPendingRows} className={cn("h-10 rounded-xl", theme === "dark" ? "bg-white/15 text-zinc-100 hover:bg-white/20" : "bg-slate-100 text-slate-700 hover:bg-slate-200")}>
+                  <Button variant="secondary" onClick={() => setConfirmDiscardPending(true)} disabled={savingPendingRows} className={cn("h-9 rounded-lg px-3 text-xs", theme === "dark" ? "bg-white/15 text-zinc-100 hover:bg-white/20" : "bg-slate-100 text-slate-700 hover:bg-slate-200")}>
                     <X className="mr-1 h-4 w-4" />{t.toolbar.discard}
                   </Button>
                 </>
@@ -364,23 +547,37 @@ export function DatabaseWorkspace({
             </div>
           </div>
 
-          <Card className="overflow-hidden rounded-3xl border-border bg-surface backdrop-blur-xl">
-            <CardHeader className={cn("border-b", theme === "dark" ? "border-white/10" : "border-slate-200")}>
+          <div className="sr-only">
+            {filters.map((filter, index) => (
+              <span
+                key={`measure-${filter.column}-${filter.value}-${index}`}
+                ref={(el) => {
+                  filterChipMeasureRefs.current[index] = el;
+                }}
+                className="inline-flex rounded-full px-2 py-1 text-[11px]"
+              >
+                {filter.column}: {filter.value}
+              </span>
+            ))}
+          </div>
+
+          <Card className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border-border bg-surface backdrop-blur-xl">
+            <CardHeader className={cn("border-b px-4 py-3", theme === "dark" ? "border-white/10" : "border-slate-200")}>
               <div className="flex items-center justify-between">
                 <div>
-                  <CardTitle className={cn(theme === "dark" ? "text-zinc-100" : "text-slate-900")}>{selectedTable} {t.main.tableTitleSuffix}</CardTitle>
+                  <CardTitle className={cn("text-base", theme === "dark" ? "text-zinc-100" : "text-slate-900")}>{selectedTable} {t.main.tableTitleSuffix}</CardTitle>
                   <CardDescription className={cn(theme === "dark" ? "text-zinc-400" : "text-slate-600")}>{t.main.tableFocusedDescription}</CardDescription>
                 </div>
                 <Badge variant="secondary" className={cn("rounded-xl", theme === "dark" ? "bg-white/10 text-zinc-200" : "bg-slate-100 text-slate-700")}>{tableData.total_rows} rows</Badge>
               </div>
             </CardHeader>
-            <CardContent className="p-0">
-              <ScrollArea className="w-full">
+            <CardContent className="flex min-h-0 flex-1 flex-col p-0">
+              <div ref={setTableViewportEl} className="min-h-0 flex-1 w-full overflow-auto">
                 <table className="w-max min-w-full text-left">
-                  <thead>
-                    <tr className={cn("border-b bg-primary/10", theme === "dark" ? "border-white/15" : "border-slate-200")}>
+                  <thead className="sticky top-0 z-10">
+                    <tr className={cn("border-b bg-primary/10 backdrop-blur-sm", theme === "dark" ? "border-white/15" : "border-slate-200")}>
                       {tableData.columns.map((col) => (
-                        <th key={col} onClick={() => onSort(col)} className={cn("cursor-pointer whitespace-nowrap border-r px-4 py-3 text-[11px] uppercase tracking-[0.16em]", theme === "dark" ? "border-white/10 text-zinc-200 hover:bg-white/5" : "border-slate-200 text-slate-700 hover:bg-slate-100")}>
+                        <th key={col} onClick={() => onSort(col)} className={cn("cursor-pointer whitespace-nowrap border-r px-3 py-2.5 text-[11px] tracking-[0.04em]", theme === "dark" ? "border-white/10 text-zinc-200 hover:bg-white/5" : "border-slate-200 text-slate-700 hover:bg-slate-100")}>
                           {col} {sortInfo?.column === col ? (sortInfo.direction === "ASC" ? "↑" : "↓") : ""}
                         </th>
                       ))}
@@ -438,23 +635,45 @@ export function DatabaseWorkspace({
                     {showInitialTableLoading ? (
                       <tr><td colSpan={tableData.columns.length + 1} className="px-4 py-12 text-center text-slate-400">{t.table.loading}</td></tr>
                     ) : tableData.rows.length > 0 ? (
-                      tableData.rows.map((row, rowIdx) => {
+                      <>
+                        {virtualWindow.paddingTop > 0 && (
+                          <tr>
+                            <td colSpan={tableData.columns.length + 1} style={{ height: virtualWindow.paddingTop }} />
+                          </tr>
+                        )}
+
+                        {visibleRows.map(({ row, rowIdx }) => {
                         const rowKey = getRowKey(row, rowIdx);
                         const rowHasPendingChanges = !!pendingRowEdits[rowKey];
+                        const rowIsEditing = editingCell?.row === rowIdx;
 
                         return (
-                          <tr key={rowKey} className={cn("group border-b", theme === "dark" ? "border-white/10 hover:bg-white/5" : "border-slate-200 hover:bg-slate-50", rowHasPendingChanges && "bg-amber-300/15")}>
+                          <tr
+                            key={rowKey}
+                            className={cn(
+                              "group border-b",
+                              theme === "dark" ? "border-white/10 hover:bg-white/5" : "border-slate-200 hover:bg-slate-50",
+                              rowHasPendingChanges && "bg-amber-300/15",
+                              rowIsEditing && (theme === "dark" ? "bg-indigo-500/12" : "bg-indigo-50")
+                            )}
+                          >
                             {tableData.columns.map((col, colIdx) => {
                               const value = getPendingDisplayValue(row, rowIdx, col);
                               const isBoolean = isBooleanColumn(col);
 
                               return (
-                                <td key={col} className={cn("whitespace-nowrap border-r px-4 py-2.5", theme === "dark" ? "border-white/10" : "border-slate-200", colIdx === 0 && (theme === "dark" ? "font-semibold text-zinc-100" : "font-semibold text-slate-900"))} onDoubleClick={() => onCellEdit(rowIdx, col, value)}>
+                                <td key={col} className={cn("whitespace-nowrap border-r px-3 py-2", theme === "dark" ? "border-white/10" : "border-slate-200", colIdx === 0 && (theme === "dark" ? "font-semibold text-zinc-100" : "font-semibold text-slate-900"))} onDoubleClick={() => onCellEdit(rowIdx, col, value)}>
                                   {editingCell?.row === rowIdx && editingCell?.col === col ? (
-                                    <div className="flex items-center gap-1 rounded-lg border border-indigo-400/70 bg-slate-950/80 p-1">
+                                    <div className={cn(
+                                      "flex items-center gap-1",
+                                      theme === "dark" ? "text-zinc-100" : "text-slate-800"
+                                    )}>
                                       <input
                                         type="text"
-                                        className="flex-1 border-none bg-transparent px-2 py-1 text-xs text-slate-100 focus:outline-none"
+                                        className={cn(
+                                          "min-w-0 flex-1 border-0 bg-transparent px-0 py-0 text-xs focus:outline-none",
+                                          theme === "dark" ? "text-zinc-100" : "text-slate-800"
+                                        )}
                                         value={editValue}
                                         onChange={(e) => onEditValueChange(e.target.value)}
                                         onKeyDown={(e) => {
@@ -463,8 +682,37 @@ export function DatabaseWorkspace({
                                         }}
                                         autoFocus
                                       />
-                                      <button type="button" onClick={(e) => { e.preventDefault(); e.stopPropagation(); onCellSave(); }} className="grid h-6 w-6 place-items-center rounded bg-indigo-500 text-white"><Check className="h-3 w-3" /></button>
-                                      <button type="button" onClick={(e) => { e.stopPropagation(); onCancelCellEdit(); }} className="grid h-6 w-6 place-items-center rounded bg-slate-700 text-slate-100"><X className="h-3 w-3" /></button>
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.preventDefault();
+                                          e.stopPropagation();
+                                          onCellSave();
+                                        }}
+                                        className={cn(
+                                          "grid h-5 w-5 shrink-0 place-items-center rounded transition-colors",
+                                          theme === "dark"
+                                            ? "text-emerald-300 hover:bg-emerald-500/15"
+                                            : "text-emerald-700 hover:bg-emerald-100"
+                                        )}
+                                      >
+                                        <Check className="h-3 w-3" />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          onCancelCellEdit();
+                                        }}
+                                        className={cn(
+                                          "grid h-5 w-5 shrink-0 place-items-center rounded transition-colors",
+                                          theme === "dark"
+                                            ? "text-zinc-300 hover:bg-white/10"
+                                            : "text-slate-600 hover:bg-slate-100"
+                                        )}
+                                      >
+                                        <X className="h-3 w-3" />
+                                      </button>
                                     </div>
                                   ) : isBoolean && value !== null ? (
                                     <div className="flex items-center gap-2 text-slate-200">
@@ -482,17 +730,23 @@ export function DatabaseWorkspace({
                             </td>
                           </tr>
                         );
-                      })
+                      })}
+
+                        {virtualWindow.paddingBottom > 0 && (
+                          <tr>
+                            <td colSpan={tableData.columns.length + 1} style={{ height: virtualWindow.paddingBottom }} />
+                          </tr>
+                        )}
+                      </>
                     ) : (
                       <tr><td colSpan={tableData.columns.length + 1} className="px-4 py-12 text-center text-slate-400">{t.table.noData}</td></tr>
                     )}
                   </tbody>
                 </table>
-                <ScrollBar orientation="horizontal" />
-              </ScrollArea>
+              </div>
 
               {tableData.rows.length > 0 && (
-                <div className={cn("flex flex-wrap items-center justify-between gap-2 border-t px-4 py-3", theme === "dark" ? "border-[#3a3a3a] bg-[#1d1d1d]" : "border-slate-200 bg-slate-50")}>
+                <div className={cn("flex flex-wrap items-center justify-between gap-2 border-t px-3 py-2", theme === "dark" ? "border-[#3a3a3a] bg-[#1d1d1d]" : "border-slate-200 bg-slate-50")}>
                   <span className={cn("text-[11px]", theme === "dark" ? "text-zinc-400" : "text-slate-600")}>{(page - 1) * pageSize + 1} - {Math.min(page * pageSize, tableData.total_rows)} {t.table.of} {tableData.total_rows.toLocaleString()}</span>
                   <div className="flex items-center gap-2">
                     <div className={cn("flex items-center gap-1 rounded-xl border px-2 py-1", theme === "dark" ? "border-[#3a3a3a] bg-[#262626]" : "border-slate-200 bg-white")}>
@@ -536,6 +790,103 @@ export function DatabaseWorkspace({
               }}
             >
               {t.actions.delete}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isDiagramOpen} onOpenChange={setIsDiagramOpen}>
+        <DialogContent className={cn("max-w-[92vw] p-4", theme === "dark" ? "border-[#3a3a3a] bg-[#1a1a1a] text-zinc-100" : "bg-white text-slate-900")}>
+          <DialogHeader className="pb-2">
+            <DialogTitle>{t.toolbar.viewDiagram}</DialogTitle>
+            <DialogDescription className={cn(theme === "dark" ? "text-zinc-400" : "text-slate-600")}>
+              {t.toolbar.viewDiagramDescription}
+            </DialogDescription>
+          </DialogHeader>
+          {diagramLoading ? (
+            <div className={cn("grid h-[72vh] place-items-center rounded-xl border text-sm", theme === "dark" ? "border-white/10 text-zinc-400" : "border-slate-200 text-slate-500")}>
+              {t.table.loading}
+            </div>
+          ) : (
+            <DatabaseSchemaDiagram theme={theme} schemas={diagramSchemas} emptyLabel={t.toolbar.noDiagramData} />
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isFiltersModalOpen} onOpenChange={setIsFiltersModalOpen}>
+        <DialogContent className={cn(theme === "dark" ? "border-[#3a3a3a] bg-[#1f1f1f] text-zinc-100" : "bg-white text-slate-900")}>
+          <DialogHeader>
+            <DialogTitle>{t.toolbar.manageFilters}</DialogTitle>
+            <DialogDescription className={cn(theme === "dark" ? "text-zinc-400" : "text-slate-600")}>
+              {t.toolbar.manageFiltersDescription}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <Select value={newFilterColumn || "__all__"} onValueChange={(value) => setNewFilterColumn(value === "__all__" ? "" : value)}>
+                <SelectTrigger className={cn("h-9 w-[180px] shrink-0 text-xs", theme === "dark" ? "border-[#3a3a3a] bg-[#2a2a2a] text-zinc-100" : "border-slate-300 bg-white text-slate-700")}>
+                  <SelectValue placeholder={t.toolbar.allColumns} />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__all__">{t.toolbar.allColumns}</SelectItem>
+                  {tableData?.columns.map((col) => (
+                    <SelectItem key={col} value={col}>{col}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Input
+                className={cn("h-9 min-w-0 flex-1 text-xs", theme === "dark" ? "border-[#3a3a3a] bg-[#2a2a2a] text-zinc-100 placeholder:text-zinc-500" : "border-slate-300 bg-white text-slate-700 placeholder:text-slate-400")}
+                placeholder={t.toolbar.filterValuePlaceholder}
+                value={newFilterValue}
+                onChange={(e) => setNewFilterValue(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key !== "Enter") return;
+                  if (!newFilterValue.trim()) return;
+                  onAddFilter({
+                    column: newFilterColumn || tableData?.columns[0] || "id",
+                    value: newFilterValue.trim(),
+                  });
+                  setNewFilterValue("");
+                }}
+              />
+              <Button
+                type="button"
+                onClick={() => {
+                  if (!newFilterValue.trim()) return;
+                  onAddFilter({
+                    column: newFilterColumn || tableData?.columns[0] || "id",
+                    value: newFilterValue.trim(),
+                  });
+                  setNewFilterValue("");
+                }}
+                className="h-9 shrink-0 rounded-lg"
+              >
+                {t.toolbar.addFilterRule}
+              </Button>
+            </div>
+
+            <div className={cn("max-h-44 space-y-2 overflow-auto rounded-xl border p-2", theme === "dark" ? "border-white/10" : "border-slate-200")}>
+              {filters.length === 0 && (
+                <p className={cn("px-1 py-2 text-xs", theme === "dark" ? "text-zinc-500" : "text-slate-500")}>{t.toolbar.noFiltersApplied}</p>
+              )}
+              {filters.map((filter, index) => (
+                <div key={`${filter.column}-${filter.value}-${index}`} className={cn("flex items-center justify-between rounded-lg px-2 py-1.5 text-xs", theme === "dark" ? "bg-white/5 text-zinc-200" : "bg-slate-50 text-slate-700")}>
+                  <span className="truncate">{filter.column}: {filter.value}</span>
+                  <Button type="button" variant="ghost" size="sm" onClick={() => onRemoveFilter(index)} className={cn("h-7 px-2", theme === "dark" ? "text-zinc-300 hover:bg-white/10" : "text-slate-600 hover:bg-slate-100")}>
+                    {t.actions.delete}
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="secondary" onClick={onClearFilters} disabled={filters.length === 0}>
+              {t.toolbar.clearFilters}
+            </Button>
+            <Button onClick={() => setIsFiltersModalOpen(false)}>
+              {t.dialog.cancel}
             </Button>
           </DialogFooter>
         </DialogContent>

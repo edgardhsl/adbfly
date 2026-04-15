@@ -1,11 +1,7 @@
 import type { Metadata } from "next";
-import { Inter, Manrope } from "next/font/google";
 import "./globals.css";
 import "flag-icons/css/flag-icons.min.css";
 import { ToastProvider } from "@/components/toast-provider";
-
-const manrope = Manrope({ subsets: ["latin"], variable: "--font-headline" });
-const inter = Inter({ subsets: ["latin"], variable: "--font-body" });
 
 export const metadata: Metadata = {
   title: "ADB Fly",
@@ -19,7 +15,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className="light">
-      <body className={`${manrope.variable} ${inter.variable}`}>
+      <body>
         {children}
         <ToastProvider />
       </body>

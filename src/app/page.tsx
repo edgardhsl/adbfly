@@ -1,29 +1,36 @@
 "use client";
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
+import dynamic from "next/dynamic";
 import { listen } from "@tauri-apps/api/event";
 import { toast } from "sonner";
 import { type ChartConfig } from "@/components/ui/chart";
 import { listDevices, listPackages, getDeviceOverview, listDatabases, listTables, getTableData, getTableSchema, executeSql, getAppConfig, saveAppConfig } from "@/lib/api";
-import type { AppConfig, SortInfo, FilterInfo } from "@/lib/types";
+import type { AppConfig, SortInfo, FilterInfo, TableSchema } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { useI18n, I18nProvider } from "@/lib/I18nContext";
 import type { Locale } from "@/lib/i18n";
 import { OVERVIEW_USAGE_HISTORY, type UsageHistoryPoint, type WorkspaceView } from "@/lib/workspace-navigation";
 import { WorkspaceHeader } from "@/components/workspace/workspace-header";
-import { OverviewSection } from "@/components/workspace/overview-section";
 import { OverviewBackdrop } from "@/components/workspace/overview-backdrop";
 import { WorkspaceSidebar } from "@/components/workspace/workspace-sidebar";
 import { DatabaseWorkspace } from "@/components/workspace/database-workspace";
 import { SettingsWorkspace } from "@/components/workspace/settings-workspace";
 import { useWorkspaceState } from "@/hooks/use-workspace-state";
 
+const OverviewSection = dynamic(
+  () => import("@/components/workspace/overview-section").then((module) => module.OverviewSection),
+  { ssr: false }
+);
+
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       staleTime: 1000 * 60,
+      gcTime: 1000 * 60 * 5,
+      refetchOnWindowFocus: false,
       retry: 1,
     },
   },
@@ -46,13 +53,14 @@ function AppContent() {
   const [selectedPackage, setSelectedPackage] = useState<string | null>(null);
   const [selectedDb, setSelectedDb] = useState<string | null>(null);
   const [databaseKeys, setDatabaseKeys] = useState<Record<string, string>>({});
+  const [encryptedDatabases, setEncryptedDatabases] = useState<Set<string>>(new Set());
   const [selectedTable, setSelectedTable] = useState<string | null>(null);
+  const [packageSearchInput, setPackageSearchInput] = useState("");
   const [packageSearch, setPackageSearch] = useState("");
   const [editingCell, setEditingCell] = useState<{ row: number; col: string } | null>(null);
   const [editValue, setEditValue] = useState("");
   const [sortInfo, setSortInfo] = useState<SortInfo | null>(null);
   const [filters, setFilters] = useState<FilterInfo[]>([]);
-  const [filterInput, setFilterInput] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
   const [isAddingInlineRow, setIsAddingInlineRow] = useState(false);
@@ -64,10 +72,96 @@ function AppContent() {
   const [liveUsageHistory, setLiveUsageHistory] = useState<UsageHistoryPoint[]>([]);
   const [appConfig, setAppConfig] = useState<AppConfig | null>(null);
   const [savingAppConfig, setSavingAppConfig] = useState(false);
+  const [shouldLoadDiagramSchemas, setShouldLoadDiagramSchemas] = useState(false);
+  const [isWindowVisible, setIsWindowVisible] = useState(true);
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", theme === "dark");
   }, [theme]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setPackageSearch(packageSearchInput);
+    }, 220);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [packageSearchInput]);
+
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+
+    const updateVisibility = () => {
+      setIsWindowVisible(!document.hidden);
+    };
+
+    updateVisibility();
+    document.addEventListener("visibilitychange", updateVisibility);
+    window.addEventListener("focus", updateVisibility);
+    window.addEventListener("blur", updateVisibility);
+
+    return () => {
+      document.removeEventListener("visibilitychange", updateVisibility);
+      window.removeEventListener("focus", updateVisibility);
+      window.removeEventListener("blur", updateVisibility);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!("__TAURI_INTERNALS__" in window)) return;
+
+    const blockedCombos = new Set([
+      "f5",
+      "ctrl+f5",
+      "ctrl+r",
+      "ctrl+shift+r",
+      "meta+r",
+      "meta+shift+r",
+      "alt+arrowleft",
+      "alt+arrowright",
+      "browserback",
+      "browserforward",
+    ]);
+
+    const toKeyCombo = (event: KeyboardEvent) => {
+      const parts: string[] = [];
+      if (event.ctrlKey) parts.push("ctrl");
+      if (event.metaKey) parts.push("meta");
+      if (event.altKey) parts.push("alt");
+      if (event.shiftKey) parts.push("shift");
+      parts.push(event.key.toLowerCase());
+      return parts.join("+");
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      const combo = toKeyCombo(event);
+      if (blockedCombos.has(combo)) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    };
+
+    const onDragOver = (event: DragEvent) => {
+      event.preventDefault();
+    };
+
+    const onDrop = (event: DragEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+    };
+
+    window.addEventListener("keydown", onKeyDown, { capture: true });
+    window.addEventListener("dragover", onDragOver);
+    window.addEventListener("drop", onDrop);
+
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, { capture: true });
+      window.removeEventListener("dragover", onDragOver);
+      window.removeEventListener("drop", onDrop);
+    };
+  }, []);
 
   const { data: devices = [], isLoading: loadingDevices, refetch: refetchDevices } = useQuery({
     queryKey: ["devices"],
@@ -85,11 +179,9 @@ function AppContent() {
     if (appConfigData) {
       setAppConfig(appConfigData);
       const configLocale = normalizeLocale(appConfigData.preferred_locale);
-      if (locale !== configLocale) {
-        setLocale(configLocale);
-      }
+      setLocale(configLocale);
     }
-  }, [appConfigData, locale, setLocale]);
+  }, [appConfigData]);
 
   useEffect(() => {
     if (appConfigError) {
@@ -146,7 +238,7 @@ function AppContent() {
     queryKey: ["packages", selectedDevice],
     queryFn: () => selectedDevice ? listPackages(selectedDevice) : Promise.resolve([]),
     enabled: !!selectedDevice,
-    refetchInterval: selectedDevice ? 10000 : false,
+    refetchInterval: selectedDevice && isWindowVisible ? 10000 : false,
     retry: 2,
   });
 
@@ -158,13 +250,13 @@ function AppContent() {
     queryKey: ["deviceOverview", selectedDevice],
     queryFn: () => selectedDevice ? getDeviceOverview(selectedDevice) : Promise.resolve(null),
     enabled: !!selectedDevice,
-    refetchInterval: selectedDevice ? 3000 : false,
-    refetchIntervalInBackground: true,
+    refetchInterval: selectedDevice && workspaceView === "overview" && isWindowVisible ? 3000 : false,
+    refetchIntervalInBackground: false,
     retry: 2,
   });
 
   useEffect(() => {
-    if (!selectedDevice || !deviceOverview) return;
+    if (!selectedDevice || !deviceOverview || workspaceView !== "overview" || !isWindowVisible) return;
 
     const now = new Date();
     const label = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}:${String(now.getSeconds()).padStart(2, "0")}`;
@@ -181,7 +273,7 @@ function AppContent() {
 
       return next.slice(-24);
     });
-  }, [deviceOverview, selectedDevice]);
+  }, [deviceOverview, isWindowVisible, selectedDevice, workspaceView]);
 
   const { data: databases = [], isFetching: fetchingDbs } = useQuery({
     queryKey: ["databases", selectedDevice, selectedPackage],
@@ -189,7 +281,7 @@ function AppContent() {
     enabled: !!selectedDevice && !!selectedPackage,
   });
 
-  const { data: tables = [], isError: tablesError } = useQuery({
+  const { data: tables = [], isError: tablesError, error: tablesQueryError } = useQuery({
     queryKey: ["tables", selectedDevice, selectedPackage, selectedDb, selectedDb ? databaseKeys[selectedDb] ?? "" : ""],
     queryFn: () =>
       selectedDevice && selectedPackage && selectedDb
@@ -228,9 +320,62 @@ function AppContent() {
     enabled: !!selectedDevice && !!selectedPackage && !!selectedDb && !!selectedTable,
   });
 
-  const filteredPackages = packages.filter(p => 
-    p.name.toLowerCase().includes(packageSearch.toLowerCase())
+  const { data: diagramSchemas = {}, isFetching: loadingDiagramSchemas } = useQuery({
+    queryKey: [
+      "diagramSchemas",
+      selectedDevice,
+      selectedPackage,
+      selectedDb,
+      tables,
+      selectedDb ? databaseKeys[selectedDb] ?? "" : "",
+    ],
+    queryFn: async () => {
+      if (!selectedDevice || !selectedPackage || !selectedDb || tables.length === 0) {
+        return {} as Record<string, TableSchema>;
+      }
+
+      const entries = await Promise.all(
+        tables.map(async (tableName) => {
+          const schema = await getTableSchema(selectedDevice, selectedPackage, selectedDb, tableName, databaseKeys[selectedDb]);
+          return [tableName, schema] as const;
+        })
+      );
+
+      return Object.fromEntries(entries) as Record<string, TableSchema>;
+    },
+    enabled: shouldLoadDiagramSchemas && !!selectedDevice && !!selectedPackage && !!selectedDb && tables.length > 0,
+    staleTime: 1000 * 60 * 5,
+    refetchOnWindowFocus: false,
+  });
+
+  const filteredPackages = useMemo(
+    () => packages.filter((p) => p.name.toLowerCase().includes(packageSearch.toLowerCase())),
+    [packages, packageSearch]
   );
+
+  const getErrorMessage = (value: unknown) => {
+    if (!value) return "";
+    if (typeof value === "string") return value;
+    if (value instanceof Error) return value.message;
+    return String(value);
+  };
+
+  useEffect(() => {
+    if (!selectedDb || !tablesError) return;
+    const message = getErrorMessage(tablesQueryError).toLowerCase();
+    const indicatesEncryptedDb =
+      message.includes("encrypted") ||
+      message.includes("sqlcipher") ||
+      message.includes("file is not a database");
+
+    if (!indicatesEncryptedDb) return;
+
+    setEncryptedDatabases((previous) => {
+      const next = new Set(previous);
+      next.add(selectedDb);
+      return next;
+    });
+  }, [selectedDb, tablesError, tablesQueryError]);
 
   const pkColumn = tableSchema?.columns.find((c) => c.primary_key)?.name;
 
@@ -263,14 +408,14 @@ function AppContent() {
     setEditingCell(null);
   };
 
-  const handleSort = (column: string) => {
+  const handleSort = useCallback((column: string) => {
     setSortInfo(prev => ({
       column,
       direction: prev?.column === column && prev.direction === "ASC" ? "DESC" : "ASC",
     }));
-  };
+  }, []);
 
-  const handleCellEdit = (row: number, col: string, value: unknown) => {
+  const handleCellEdit = useCallback((row: number, col: string, value: unknown) => {
     const hasPrimaryKey = !!tableSchema?.columns.some((c) => c.primary_key);
     if (!hasPrimaryKey) {
       toast.warning("Tabela sem chave primaria", {
@@ -281,7 +426,7 @@ function AppContent() {
 
     setEditingCell({ row, col });
     setEditValue(value === null ? "" : String(value));
-  };
+  }, [tableSchema]);
 
   const handleCellSave = () => {
     if (!editingCell || !tableData || !pkColumn) return;
@@ -427,56 +572,48 @@ function AppContent() {
     }
   };
 
-  const [filterColumn, setFilterColumn] = useState<string>("");
-
-  const applyFilter = () => {
-    if (!filterInput.trim()) {
-      setFilters([]);
-      setPage(1);
-      return;
-    }
-    const col = filterColumn || tableData?.columns[0] || "id";
-    console.log("Applying filter:", col, filterInput);
-    setFilters([{ column: col, value: filterInput }]);
-    setPage(1);
-  };
-
-  const selectDevice = (deviceId: string) => {
+  const selectDevice = useCallback((deviceId: string) => {
     setSelectedDevice(deviceId);
     setSelectedPackage(null);
     setSelectedDb(null);
     setDatabaseKeys({});
+    setEncryptedDatabases(new Set());
     setSelectedTable(null);
+    setPackageSearchInput("");
     setPackageSearch("");
     setWorkspaceView("overview");
     setIsAddingInlineRow(false);
     setNewRowData({});
     setLiveUsageHistory([]);
+    setShouldLoadDiagramSchemas(false);
     clearPendingChanges();
-  };
+  }, []);
 
-  const selectPackage = (pkg: string) => {
+  const selectPackage = useCallback((pkg: string) => {
     setSelectedPackage(pkg);
     setSelectedDb(null);
     setDatabaseKeys({});
+    setEncryptedDatabases(new Set());
     setSelectedTable(null);
     setWorkspaceView("overview");
     setIsAddingInlineRow(false);
     setNewRowData({});
+    setShouldLoadDiagramSchemas(false);
     clearPendingChanges();
-  };
+  }, []);
 
-  const selectDb = (db: string) => {
+  const selectDb = useCallback((db: string) => {
     setSelectedDb(db);
     setSelectedTable(null);
     setWorkspaceView("databases");
     setIsAddingInlineRow(false);
     setNewRowData({});
+    setShouldLoadDiagramSchemas(false);
     clearPendingChanges();
     setExpandedDbs(prev => new Set(Array.from(prev).concat(db)));
-  };
+  }, []);
 
-  const selectTable = (table: string) => {
+  const selectTable = useCallback((table: string) => {
     setSelectedTable(table);
     setWorkspaceView("databases");
     setIsAddingInlineRow(false);
@@ -484,11 +621,14 @@ function AppContent() {
     setPage(1);
     setSortInfo(null);
     setFilters([]);
-    setFilterInput("");
+    setShouldLoadDiagramSchemas(false);
     clearPendingChanges();
-  };
+  }, []);
 
-  const currentDevice = devices.find(d => d.id === selectedDevice);
+  const currentDevice = useMemo(
+    () => devices.find((d) => d.id === selectedDevice),
+    [devices, selectedDevice]
+  );
 
   const isBooleanColumn = (columnName: string) => {
     const type = tableSchema?.columns.find((column) => column.name === columnName)?.col_type ?? "";
@@ -525,18 +665,25 @@ function AppContent() {
     selectedPackage,
   });
 
-  const usageHistory = canOpenOverview ? liveUsageHistory : OVERVIEW_USAGE_HISTORY;
+  const usageHistory = useMemo(
+    () => (canOpenOverview ? liveUsageHistory : OVERVIEW_USAGE_HISTORY),
+    [canOpenOverview, liveUsageHistory]
+  );
 
-  const resourceChartConfig = {
-    cpu: {
-      label: t.main.cpuUsage,
-      color: "var(--primary)",
-    },
-    memory: {
-      label: t.main.memoryUsage,
-      color: "var(--success)",
-    },
-  } satisfies ChartConfig;
+  const resourceChartConfig = useMemo(
+    () =>
+      ({
+        cpu: {
+          label: t.main.cpuUsage,
+          color: "var(--primary)",
+        },
+        memory: {
+          label: t.main.memoryUsage,
+          color: "var(--success)",
+        },
+      }) satisfies ChartConfig,
+    [t.main.cpuUsage, t.main.memoryUsage]
+  );
 
   return (
     <div
@@ -545,7 +692,7 @@ function AppContent() {
         theme === "dark" ? "bg-[#121212]" : "bg-[#fafafa]"
       )}
     >
-      <div className="relative grid h-full w-full grid-cols-[320px_1fr]">
+      <div className="relative grid h-full w-full grid-cols-[300px_minmax(0,1fr)] xl:grid-cols-[320px_minmax(0,1fr)]">
         <WorkspaceSidebar
           theme={theme}
           t={t}
@@ -553,8 +700,8 @@ function AppContent() {
           currentDevice={currentDevice}
           selectedPackage={selectedPackage}
           hasSelectedDevice={hasSelectedDevice}
-          packageSearch={packageSearch}
-          onPackageSearchChange={setPackageSearch}
+          packageSearch={packageSearchInput}
+          onPackageSearchChange={setPackageSearchInput}
           navGroups={navGroups}
           workspaceView={workspaceView}
           onWorkspaceViewChange={setWorkspaceView}
@@ -587,6 +734,16 @@ function AppContent() {
             locale={locale}
             onLocaleChange={(nextLocale) => {
               setLocale(nextLocale);
+              setAppConfig((prev) =>
+                prev
+                  ? { ...prev, preferred_locale: nextLocale }
+                  : prev
+              );
+              queryClient.setQueryData<AppConfig | null>(["appConfig"], (prev) =>
+                prev
+                  ? { ...prev, preferred_locale: nextLocale }
+                  : prev
+              );
               if (!appConfig) return;
               void saveAppConfig(
                 appConfig.openssl_dir,
@@ -594,7 +751,10 @@ function AppContent() {
                 appConfig.openssl_include_dir,
                 nextLocale
               )
-                .then((nextConfig) => setAppConfig(nextConfig))
+                .then((nextConfig) => {
+                  setAppConfig(nextConfig);
+                  queryClient.setQueryData(["appConfig"], nextConfig);
+                })
                 .catch(() => {
                   toast.error(t.settings.saveFailed);
                 });
@@ -604,7 +764,7 @@ function AppContent() {
             onToggleTheme={() => setTheme(theme === "light" ? "dark" : "light")}
           />
 
-          <div className="relative z-20 flex-1 overflow-auto p-6">
+          <div className={cn("relative z-20 flex-1 overflow-auto", isDatabaseView ? "p-4" : "p-6")}>
             {showOverview && (
               <OverviewSection
                 theme={theme}
@@ -634,6 +794,7 @@ function AppContent() {
                 tablesError={tablesError}
                 fetchingDbs={fetchingDbs}
                 selectedDb={selectedDb}
+                requiresSqlCipherKey={!!(selectedDb && encryptedDatabases.has(selectedDb))}
                 databaseKey={selectedDb ? databaseKeys[selectedDb] ?? "" : ""}
                 onApplyDatabaseKey={(key) => {
                   if (!selectedDb) return;
@@ -646,11 +807,23 @@ function AppContent() {
                 selectedTable={selectedTable}
                 tableData={tableData}
                 tableSchema={tableSchema}
-                filterColumn={filterColumn}
-                onFilterColumnChange={setFilterColumn}
-                filterInput={filterInput}
-                onFilterInputChange={setFilterInput}
-                onApplyFilter={applyFilter}
+                diagramSchemas={diagramSchemas}
+                diagramLoading={loadingDiagramSchemas}
+                onOpenDiagram={() => setShouldLoadDiagramSchemas(true)}
+                filters={filters}
+                onAddFilter={(filter) => {
+                  if (!filter.value.trim()) return;
+                  setFilters((prev) => [...prev, { column: filter.column, value: filter.value.trim() }]);
+                  setPage(1);
+                }}
+                onRemoveFilter={(index) => {
+                  setFilters((prev) => prev.filter((_, i) => i !== index));
+                  setPage(1);
+                }}
+                onClearFilters={() => {
+                  setFilters([]);
+                  setPage(1);
+                }}
                 isAddingInlineRow={isAddingInlineRow}
                 newRowData={newRowData}
                 onAddRowOpen={() => {

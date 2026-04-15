@@ -60,7 +60,7 @@ export function LanguageDropdown({ value, onChange, className }: LanguageDropdow
             "absolute right-0 top-full mt-1 py-1 rounded-lg shadow-lg",
             "bg-popover",
             "border border-border",
-            "z-50 min-w-[100px]"
+            "z-[80] min-w-[100px]"
           )}
         >
           {languages.map((lang) => (

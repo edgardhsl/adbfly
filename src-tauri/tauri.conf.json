@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "com.adbfly.app",
   "build": {
-    "beforeDevCommand": "cd .. && npm run dev:tauri",
+    "beforeDevCommand": "npm run dev:tauri",
     "devUrl": "http://localhost:3000",
-    "beforeBuildCommand": "cd .. && npm run build",
+    "beforeBuildCommand": "npm run build",
     "frontendDist": "../out"
   },
   "app": {
@@ -15,8 +15,8 @@
         "title": "ADB Fly",
         "width": 1280,
         "height": 800,
-        "minWidth": 1024,
-        "minHeight": 600,
+        "minWidth": 1180,
+        "minHeight": 720,
         "resizable": true,
         "fullscreen": false,
         "center": true

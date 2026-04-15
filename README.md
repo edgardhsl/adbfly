@@ -18,7 +18,7 @@
 ---
 
 <p align="center">
-  <img src="./public/images/app.png" alt="ADB Fly app screenshot" width="980" />
+  <img src="./public/images/app.webp" alt="ADB Fly app screenshot" width="980" />
 </p>
 
 ---

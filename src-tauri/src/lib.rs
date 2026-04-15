@@ -6,15 +6,17 @@ pub mod presentation;
 pub use application::{DatabaseUseCases, DeviceUseCases};
 pub use domain::entities;
 pub use presentation::commands;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let app_state = Arc::new(Mutex::new(presentation::commands::AppState::new()));
+    let app_state = Arc::new(presentation::commands::AppState::new());
 
     tauri::Builder::default()
         .manage(app_state)
         .setup(|app| {
+            presentation::commands::ensure_app_config_exists(&app.handle())
+                .map_err(std::io::Error::other)?;
             infrastructure::adb::tracker::start_device_tracker(app.handle().clone());
             Ok(())
         })
