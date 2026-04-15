@@ -5,9 +5,9 @@
 [![Versão](https://img.shields.io/badge/version-0.1.0-blue)](https://github.com/edgardhsl/adbfly)
 [![Licença](https://img.shields.io/badge/license-MIT-green)](https://github.com/edgardhsl/adbfly/blob/main/LICENSE)
 
-<img src="./public/images/logo.webp" alt="ADB Fly - Tema Claro e Escuro" width="160" />
+<img src="./public/images/logo.webp" alt="ADB Fly" width="160" />
 
-<img src="./public/images/app.png" alt="Captura de tela do ADB Fly" width="980" />
+<img src="./public/images/app.webp" alt="Captura de tela do ADB Fly" width="980" />
 
 **Navegue e gerencie bancos de dados SQLite em dispositivos Android via ADB**
 
@@ -26,13 +26,14 @@ ADB Fly é um aplicativo desktop que permite navegar e gerenciar bancos de dados
 ## Recursos
 
 - **Navegador de Dispositivos**: Liste e selecione dispositivos Android conectados via ADB
-- **Explorador de Apps**: Veja apps instalados no dispositivo
-- **Navegador de Bancos**: Liste bancos de dados SQLite de cada app
-- **Visualizador de Tabelas**: Navegue por dados com paginação, ordenação e filtragem
-- **Edição de Células**: Edite valores de células com clique duplo
-- **Adicionar/Excluir Linhas**: Insira e remova registros das tabelas
-- **Sincronização Automática**: Alterações são/enviadas de volta ao dispositivo
-- **Tema Escuro/Claro**: Suporte ao tema do sistema e alternância manual
+- **Explorador de Apps**: Veja apps instalados no dispositivo selecionado
+- **Navegador de Bancos**:
+  - Liste bancos de dados SQLite de cada app
+  - Visualize tabelas com paginação, ordenação e filtragem
+  - Edição inline de células
+  - Adição e exclusão de linhas
+  - Sincronização automática das alterações para o dispositivo
+- **Busca Global na Sidebar**: Busque por dispositivos, apps, bancos e tabelas
 - **Multi-idioma**: Português, Inglês e Espanhol
 
 ---

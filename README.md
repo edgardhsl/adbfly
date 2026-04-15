@@ -48,13 +48,14 @@ With a simple interface, you can explore device apps, view databases, and perfor
 ## Features
 
 - **Device Browser**: List and select connected Android devices via ADB
-- **App Explorer**: View user-installed apps on the device
-- **Database Browser**: List SQLite databases within each app
-- **Table Viewer**: Browse table data with pagination, sorting, and filtering
-- **Cell Editing**: Edit cell values directly by double-clicking
-- **Add/Delete Rows**: Insert and remove records from tables
-- **Auto-sync**: Changes are automatically pushed back to the device
-- **Dark/Light Theme**: Supports system theme and manual toggle
+- **App Explorer**: View installed apps on the selected device
+- **Database Browser**:
+  - List SQLite databases within each app
+  - Table viewer with pagination, sorting, and filtering
+  - Inline cell editing
+  - Add and delete rows
+  - Auto-sync changes back to the device
+- **Global Sidebar Search**: Search across devices, apps, databases, and tables
 - **Multi-language**: Portuguese, English, and Spanish
 
 ---
