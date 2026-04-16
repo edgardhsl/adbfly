@@ -31,19 +31,6 @@ plugins:
       docs_structure: suffix
       fallback_to_default: true
       reconfigure_material: true
-      nav_translations:
-        pt-BR:
-          Home: Início
-          Getting Started: Primeiros passos
-          User Guide: Guia do usuário
-          Contributing: Contribuição
-          Architecture: Arquitetura
-        es:
-          Home: Inicio
-          Getting Started: Primeros pasos
-          User Guide: Guía de usuario
-          Contributing: Contribución
-          Architecture: Arquitectura
       languages:
         - locale: en
           default: true
