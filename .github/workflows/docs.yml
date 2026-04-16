@@ -31,19 +31,30 @@ jobs:
       - name: Build docs (strict)
         run: mkdocs build --strict
 
+      - name: Install lychee
+        run: |
+          curl -sSfL https://github.com/lycheeverse/lychee/releases/download/lychee-v0.23.0/lychee-x86_64-unknown-linux-gnu.tar.gz -o lychee.tar.gz
+          tar -xzf lychee.tar.gz
+          sudo mv lychee /usr/local/bin/lychee
+          lychee --version
+
       - name: Check markdown links
-        uses: lycheeverse/lychee-action@v2
-        with:
-          workingDirectory: ${{ github.workspace }}
-          args: --no-progress --verbose --mode path docs
-          fail: true
+        run: |
+          mapfile -t md_files < <(git ls-files "docs/*.md" "docs/**/*.md")
+          if [ "${#md_files[@]}" -eq 0 ]; then
+            echo "No markdown files found in docs/"
+            exit 1
+          fi
+          lychee --no-progress --verbose --mode path "${md_files[@]}"
 
       - name: Check generated site links
-        uses: lycheeverse/lychee-action@v2
-        with:
-          workingDirectory: ${{ github.workspace }}
-          args: --no-progress --verbose --mode path site
-          fail: true
+        run: |
+          mapfile -t html_files < <(find site -type f -name "*.html")
+          if [ "${#html_files[@]}" -eq 0 ]; then
+            echo "No generated html files found in site/"
+            exit 1
+          fi
+          lychee --no-progress --verbose --mode path "${html_files[@]}"
 
   deploy:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
