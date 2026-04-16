@@ -34,14 +34,14 @@ jobs:
       - name: Check markdown links
         uses: lycheeverse/lychee-action@v2
         with:
-          workingDirectory: /github/workspace
+          workingDirectory: ${{ github.workspace }}
           args: --no-progress --verbose --glob docs/**/*.md
           fail: true
 
       - name: Check generated site links
         uses: lycheeverse/lychee-action@v2
         with:
-          workingDirectory: /github/workspace
+          workingDirectory: ${{ github.workspace }}
           args: --no-progress --verbose --glob site/**/*.html
           fail: true
 
