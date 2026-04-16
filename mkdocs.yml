@@ -1,0 +1,71 @@
+site_name: ADB Fly Docs
+site_description: Documentation for ADB Fly (Android workstation)
+site_url: https://edgardhsl.github.io/adbfly/
+repo_url: https://github.com/edgardhsl/adbfly
+repo_name: edgardhsl/adbfly
+
+theme:
+  name: material
+  logo: images/logo.webp
+  favicon: images/logo.webp
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+
+plugins:
+  - search
+  - i18n:
+      docs_structure: suffix
+      fallback_to_default: true
+      reconfigure_material: true
+      nav_translations:
+        pt-BR:
+          Home: Início
+          Getting Started: Primeiros passos
+          User Guide: Guia do usuário
+          Contributing: Contribuição
+          Architecture: Arquitetura
+        es:
+          Home: Inicio
+          Getting Started: Primeros pasos
+          User Guide: Guía de usuario
+          Contributing: Contribución
+          Architecture: Arquitectura
+      languages:
+        - locale: en
+          default: true
+          name: English
+          build: true
+        - locale: pt-BR
+          name: Português (BR)
+          build: true
+        - locale: es
+          name: Español
+          build: true
+
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - User Guide: user-guide.md
+  - Contributing: contributing.md
+  - Architecture: architecture.md
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - tables
+  - toc:
+      permalink: true
