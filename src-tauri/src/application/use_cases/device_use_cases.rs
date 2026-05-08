@@ -1,4 +1,6 @@
-use crate::domain::entities::{Device, DeviceFileEntry, DeviceOverview, Package};
+use crate::domain::entities::{
+    Device, DeviceFileEntry, DeviceFilePreview, DeviceFileProperties, DeviceOverview, Package,
+};
 use crate::infrastructure::adb::AdbAdapter;
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -139,6 +141,65 @@ impl DeviceUseCases {
         path: Option<&str>,
     ) -> Result<Vec<DeviceFileEntry>, String> {
         self.adb.list_device_files(device_id, path)
+    }
+
+    pub fn download_device_file(&self, device_id: &str, remote_path: &str) -> Result<String, String> {
+        self.adb.download_device_file(device_id, remote_path)
+    }
+
+    pub fn create_device_directory(&self, device_id: &str, remote_path: &str) -> Result<(), String> {
+        self.adb.create_device_directory(device_id, remote_path)
+    }
+
+    pub fn upload_device_file(
+        &self,
+        device_id: &str,
+        destination_dir: &str,
+        file_name: &str,
+        data: &[u8],
+    ) -> Result<String, String> {
+        self.adb
+            .upload_device_file(device_id, destination_dir, file_name, data)
+    }
+
+    pub fn delete_device_path(&self, device_id: &str, remote_path: &str) -> Result<(), String> {
+        self.adb.delete_device_path(device_id, remote_path)
+    }
+
+    pub fn move_device_path(
+        &self,
+        device_id: &str,
+        source_path: &str,
+        destination_path: &str,
+    ) -> Result<(), String> {
+        self.adb.move_device_path(device_id, source_path, destination_path)
+    }
+
+    pub fn copy_device_path(
+        &self,
+        device_id: &str,
+        source_path: &str,
+        destination_path: &str,
+    ) -> Result<(), String> {
+        self.adb.copy_device_path(device_id, source_path, destination_path)
+    }
+
+    pub fn get_device_file_properties(
+        &self,
+        device_id: &str,
+        remote_path: &str,
+    ) -> Result<DeviceFileProperties, String> {
+        self.adb.get_device_file_properties(device_id, remote_path)
+    }
+
+    pub fn get_device_file_preview(
+        &self,
+        device_id: &str,
+        remote_path: &str,
+        max_bytes: Option<usize>,
+    ) -> Result<DeviceFilePreview, String> {
+        self.adb
+            .get_device_file_preview(device_id, remote_path, max_bytes.unwrap_or(8 * 1024 * 1024))
     }
 }
 

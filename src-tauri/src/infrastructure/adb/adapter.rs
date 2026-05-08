@@ -1,5 +1,9 @@
-use crate::domain::entities::{Device, DeviceFileEntry, Package};
+use crate::domain::entities::{
+    Device, DeviceFileEntry, DeviceFilePreview, DeviceFileProperties, Package,
+};
+use base64::{engine::general_purpose::STANDARD, Engine};
 use std::io::Read;
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -268,6 +272,193 @@ impl AdbAdapter {
         Ok(entries)
     }
 
+    pub fn download_device_file(&self, device_id: &str, remote_path: &str) -> Result<String, String> {
+        let file_name = file_name_from_remote_path(remote_path);
+        let sanitized_name = sanitize_local_file_name(&file_name);
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+
+        let mut base_dir = std::env::current_dir()
+            .map_err(|e| format!("Failed to resolve current dir: {}", e))?;
+        base_dir.push("out");
+        base_dir.push("downloads");
+        std::fs::create_dir_all(&base_dir)
+            .map_err(|e| format!("Failed to create downloads directory: {}", e))?;
+
+        let target_name = format!("{}_{}", nonce, sanitized_name);
+        let mut local_path = base_dir;
+        local_path.push(target_name);
+
+        self.run_with_timeout(
+            &[
+                "-s",
+                device_id,
+                "pull",
+                remote_path,
+                &local_path.to_string_lossy(),
+            ],
+            Duration::from_secs(DB_IO_TIMEOUT_SECS),
+        )?;
+
+        Ok(local_path.to_string_lossy().to_string())
+    }
+
+    pub fn create_device_directory(&self, device_id: &str, remote_path: &str) -> Result<(), String> {
+        let escaped = escape_single_quotes(remote_path);
+        let command = format!("sh -c 'mkdir -p -- '\"'\"'{}'\"'\"''", escaped);
+        self.shell_with_timeout(device_id, &command, Duration::from_secs(DEFAULT_TIMEOUT_SECS))
+            .map(|_| ())
+    }
+
+    pub fn upload_device_file(
+        &self,
+        device_id: &str,
+        destination_dir: &str,
+        file_name: &str,
+        data: &[u8],
+    ) -> Result<String, String> {
+        let dir = normalize_remote_path(Some(destination_dir));
+        let safe_name = sanitize_remote_file_name(file_name);
+        let destination_path = if dir == "/" {
+            format!("/{}", safe_name)
+        } else {
+            format!("{}/{}", dir.trim_end_matches('/'), safe_name)
+        };
+
+        self.create_device_directory(device_id, &dir)?;
+
+        let local_tmp = NamedTempFile::new()
+            .map_err(|e| format!("Failed to create temporary upload file: {}", e))?;
+        std::fs::write(local_tmp.path(), data)
+            .map_err(|e| format!("Failed to write temporary upload file: {}", e))?;
+
+        let local_tmp_path = local_tmp.path().to_string_lossy().to_string();
+        self.run_with_timeout(
+            &["-s", device_id, "push", &local_tmp_path, &destination_path],
+            Duration::from_secs(DB_IO_TIMEOUT_SECS),
+        )?;
+
+        Ok(destination_path)
+    }
+
+    pub fn delete_device_path(&self, device_id: &str, remote_path: &str) -> Result<(), String> {
+        let escaped = escape_single_quotes(remote_path);
+        let command = format!("sh -c 'rm -rf -- '\"'\"'{}'\"'\"''", escaped);
+        self.shell_with_timeout(device_id, &command, Duration::from_secs(DEFAULT_TIMEOUT_SECS))
+            .map(|_| ())
+    }
+
+    pub fn move_device_path(
+        &self,
+        device_id: &str,
+        source_path: &str,
+        destination_path: &str,
+    ) -> Result<(), String> {
+        let source_escaped = escape_single_quotes(source_path);
+        let destination_escaped = escape_single_quotes(destination_path);
+        let command = format!(
+            "sh -c 'mv -- '\"'\"'{}'\"'\"' '\"'\"'{}'\"'\"''",
+            source_escaped, destination_escaped
+        );
+        self.shell_with_timeout(device_id, &command, Duration::from_secs(DEFAULT_TIMEOUT_SECS))
+            .map(|_| ())
+    }
+
+    pub fn copy_device_path(
+        &self,
+        device_id: &str,
+        source_path: &str,
+        destination_path: &str,
+    ) -> Result<(), String> {
+        let source_escaped = escape_single_quotes(source_path);
+        let destination_escaped = escape_single_quotes(destination_path);
+        let command = format!(
+            "sh -c 'cp -R -- '\"'\"'{}'\"'\"' '\"'\"'{}'\"'\"''",
+            source_escaped, destination_escaped
+        );
+        self.shell_with_timeout(device_id, &command, Duration::from_secs(DB_IO_TIMEOUT_SECS))
+            .map(|_| ())
+    }
+
+    pub fn get_device_file_properties(
+        &self,
+        device_id: &str,
+        remote_path: &str,
+    ) -> Result<DeviceFileProperties, String> {
+        let escaped = escape_single_quotes(remote_path);
+        let command = format!(
+            "sh -c 'if [ -d '\"'\"'{}'\"'\"' ]; then echo dir; else echo file; fi; ls -ld '\"'\"'{}'\"'\"'; wc -c < '\"'\"'{}'\"'\"' 2>/dev/null || true'",
+            escaped, escaped, escaped
+        );
+        let output = self.shell_with_timeout(device_id, &command, Duration::from_secs(6))?;
+        let mut lines = output.lines();
+        let type_line = lines.next().unwrap_or("file").trim();
+        let ls_line = lines.next().unwrap_or_default();
+        let size_line = lines.next().unwrap_or_default().trim();
+
+        let is_directory = type_line == "dir";
+        let size_bytes = if is_directory {
+            None
+        } else {
+            size_line.parse::<u64>().ok()
+        };
+
+        let (permissions, modified_at) = parse_ls_long_line(ls_line);
+
+        Ok(DeviceFileProperties {
+            name: file_name_from_remote_path(remote_path),
+            full_path: remote_path.to_string(),
+            is_directory,
+            size_bytes,
+            modified_at,
+            permissions,
+        })
+    }
+
+    pub fn get_device_file_preview(
+        &self,
+        device_id: &str,
+        remote_path: &str,
+        max_bytes: usize,
+    ) -> Result<DeviceFilePreview, String> {
+        let safe_limit = max_bytes.clamp(64 * 1024, 12 * 1024 * 1024);
+        let file_size = self
+            .shell_with_timeout(
+                device_id,
+                &format!(
+                    "sh -c 'wc -c < '\"'\"'{}'\"'\"' 2>/dev/null || echo 0'",
+                    escape_single_quotes(remote_path)
+                ),
+                Duration::from_secs(4),
+            )
+            .ok()
+            .and_then(|value| value.trim().parse::<usize>().ok())
+            .unwrap_or(0);
+
+        let escaped = escape_single_quotes(remote_path);
+        let command = format!("head -c {} '\"'\"'{}'\"'\"'", safe_limit, escaped);
+        let args_owned = [
+            "-s".to_string(),
+            device_id.to_string(),
+            "exec-out".to_string(),
+            "sh".to_string(),
+            "-c".to_string(),
+            command,
+        ];
+        let args: Vec<&str> = args_owned.iter().map(String::as_str).collect();
+        let bytes = self.run_bytes_with_timeout(&args, Duration::from_secs(DB_IO_TIMEOUT_SECS))?;
+
+        Ok(DeviceFilePreview {
+            name: file_name_from_remote_path(remote_path),
+            full_path: remote_path.to_string(),
+            mime_type: detect_mime_type(remote_path),
+            content_base64: STANDARD.encode(&bytes),
+            truncated: file_size > bytes.len(),
+        })
+    }
+
     pub fn pull_app_file_snapshot(
         &self,
         device_id: &str,
@@ -380,6 +571,17 @@ fn normalize_logcat_lines(output: &str) -> Vec<String> {
         .collect()
 }
 
+fn parse_ls_long_line(line: &str) -> (Option<String>, Option<String>) {
+    let cols: Vec<&str> = line.split_whitespace().collect();
+    if cols.len() < 8 {
+        return (None, None);
+    }
+
+    let permissions = cols.first().map(|value| (*value).to_string());
+    let modified_at = Some(format!("{} {} {}", cols[5], cols[6], cols[7]));
+    (permissions, modified_at)
+}
+
 fn escape_single_quotes(input: &str) -> String {
     input.replace('\'', "'\"'\"'")
 }
@@ -402,9 +604,68 @@ fn normalize_remote_path(path: Option<&str>) -> String {
     }
 }
 
+fn file_name_from_remote_path(remote_path: &str) -> String {
+    Path::new(remote_path)
+        .file_name()
+        .map(|value| value.to_string_lossy().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "download.bin".to_string())
+}
+
+fn sanitize_local_file_name(name: &str) -> String {
+    name.chars()
+        .map(|ch| match ch {
+            '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => '_',
+            _ => ch,
+        })
+        .collect()
+}
+
+fn sanitize_remote_file_name(name: &str) -> String {
+    name.chars()
+        .map(|ch| match ch {
+            '/' | '\\' => '_',
+            _ => ch,
+        })
+        .collect()
+}
+
+fn detect_mime_type(path: &str) -> String {
+    let ext = Path::new(path)
+        .extension()
+        .map(|value| value.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+
+    let mime = match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        "gif" => "image/gif",
+        "bmp" => "image/bmp",
+        "svg" => "image/svg+xml",
+        "mp4" => "video/mp4",
+        "webm" => "video/webm",
+        "mov" => "video/quicktime",
+        "mp3" => "audio/mpeg",
+        "wav" => "audio/wav",
+        "ogg" => "audio/ogg",
+        "m4a" => "audio/mp4",
+        "pdf" => "application/pdf",
+        "json" => "application/json",
+        "xml" => "application/xml",
+        "txt" | "md" | "csv" | "log" | "yaml" | "yml" => "text/plain",
+        _ => "application/octet-stream",
+    };
+
+    mime.to_string()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{escape_single_quotes, normalize_logcat_lines, normalize_remote_path};
+    use super::{
+        escape_single_quotes, file_name_from_remote_path, normalize_logcat_lines,
+        normalize_remote_path, sanitize_local_file_name, sanitize_remote_file_name,
+    };
 
     #[test]
     fn normalize_logcat_lines_trims_and_removes_empty_lines() {
@@ -428,5 +689,33 @@ mod tests {
     fn escape_single_quotes_applies_shell_safe_pattern() {
         let escaped = escape_single_quotes("/sdcard/O'Brien");
         assert_eq!(escaped, "/sdcard/O'\"'\"'Brien");
+    }
+
+    #[test]
+    fn file_name_from_remote_path_returns_fallback_when_needed() {
+        assert_eq!(file_name_from_remote_path("/sdcard/Download/demo.apk"), "demo.apk");
+        assert_eq!(file_name_from_remote_path("/"), "download.bin");
+    }
+
+    #[test]
+    fn sanitize_local_file_name_replaces_invalid_windows_characters() {
+        let sanitized = sanitize_local_file_name("a:b*c?.txt");
+        assert_eq!(sanitized, "a_b_c_.txt");
+    }
+
+    #[test]
+    fn sanitize_remote_file_name_replaces_path_separators() {
+        let sanitized = sanitize_remote_file_name("foo/bar\\baz.db");
+        assert_eq!(sanitized, "foo_bar_baz.db");
+    }
+
+    #[test]
+    fn detect_mime_type_uses_extension() {
+        assert_eq!(super::detect_mime_type("/sdcard/image.png"), "image/png");
+        assert_eq!(super::detect_mime_type("/sdcard/readme.txt"), "text/plain");
+        assert_eq!(
+            super::detect_mime_type("/sdcard/archive.unknown"),
+            "application/octet-stream"
+        );
     }
 }

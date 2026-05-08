@@ -7,7 +7,7 @@ import dynamic from "next/dynamic";
 import { listen } from "@tauri-apps/api/event";
 import { toast } from "sonner";
 import { type ChartConfig } from "@/components/ui/chart";
-import { listDevices, listPackages, getDeviceOverview, listDeviceFiles, getLogcatLogs, listDatabases, listTables, getTableData, getTableSchema, executeSql, getAppConfig, saveAppConfig } from "@/lib/api";
+import { listDevices, listPackages, getDeviceOverview, listDeviceFiles, downloadDeviceFile, createDeviceDirectory, uploadDeviceFile, deleteDevicePath, moveDevicePath, copyDevicePath, getDeviceFileProperties, getDeviceFilePreview, getLogcatLogs, listDatabases, listTables, getTableData, getTableSchema, executeSql, getAppConfig, saveAppConfig } from "@/lib/api";
 import type { AppConfig, DeviceFileEntry, SortInfo, FilterInfo, TableSchema } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { compileLogcatFilterQuery, filterLogcatLines, mergeLogSnapshots } from "@/lib/logcat-utils";
@@ -957,6 +957,85 @@ function AppContent() {
                 onGoRoot={() => setFileExplorerPath(FILE_EXPLORER_ROOT_PATH)}
                 onRetry={() => {
                   void refetchFileExplorer();
+                }}
+                onDownload={async (entry) => {
+                  if (!selectedDevice || entry.is_directory) return;
+                  try {
+                    const localPath = await downloadDeviceFile(selectedDevice, entry.full_path);
+                    toast.success(t.actions.download, {
+                      description: localPath,
+                    });
+                  } catch (error) {
+                    toast.error(t.errors.loadFailed, { description: String(error) });
+                  }
+                }}
+                onCreateFolder={async (remotePath) => {
+                  if (!selectedDevice) return;
+                  try {
+                    await createDeviceDirectory(selectedDevice, remotePath);
+                    toast.success(t.actions.createFolder);
+                    await refetchFileExplorer();
+                  } catch (error) {
+                    toast.error(t.errors.saveFailed, { description: String(error) });
+                  }
+                }}
+                onUploadFile={async (file, destinationDir) => {
+                  if (!selectedDevice) return;
+                  try {
+                    const buffer = await file.arrayBuffer();
+                    const uploadedPath = await uploadDeviceFile(
+                      selectedDevice,
+                      destinationDir,
+                      file.name,
+                      new Uint8Array(buffer)
+                    );
+                    toast.success(t.actions.uploadFile, { description: uploadedPath });
+                    await refetchFileExplorer();
+                  } catch (error) {
+                    toast.error(t.errors.saveFailed, { description: String(error) });
+                  }
+                }}
+                onDelete={async (entry) => {
+                  if (!selectedDevice) return;
+                  try {
+                    await deleteDevicePath(selectedDevice, entry.full_path);
+                    toast.success(t.actions.delete);
+                    await refetchFileExplorer();
+                  } catch (error) {
+                    toast.error(t.errors.deleteFailed, { description: String(error) });
+                  }
+                }}
+                onMove={async (entry, destinationPath) => {
+                  if (!selectedDevice) return;
+                  try {
+                    await moveDevicePath(selectedDevice, entry.full_path, destinationPath);
+                    toast.success(t.actions.move);
+                    await refetchFileExplorer();
+                  } catch (error) {
+                    toast.error(t.errors.saveFailed, { description: String(error) });
+                  }
+                }}
+                onCopy={async (entry, destinationPath) => {
+                  if (!selectedDevice) return;
+                  try {
+                    await copyDevicePath(selectedDevice, entry.full_path, destinationPath);
+                    toast.success(t.actions.copy);
+                    await refetchFileExplorer();
+                  } catch (error) {
+                    toast.error(t.errors.saveFailed, { description: String(error) });
+                  }
+                }}
+                onGetProperties={async (entry) => {
+                  if (!selectedDevice) {
+                    throw new Error(t.main.connectDeviceOverlay);
+                  }
+                  return getDeviceFileProperties(selectedDevice, entry.full_path);
+                }}
+                onPreview={async (entry) => {
+                  if (!selectedDevice) {
+                    throw new Error(t.main.connectDeviceOverlay);
+                  }
+                  return getDeviceFilePreview(selectedDevice, entry.full_path);
                 }}
               />
             )}

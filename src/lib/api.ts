@@ -4,6 +4,8 @@ import type {
   DatabaseInfo,
   Device,
   DeviceFileEntry,
+  DeviceFilePreview,
+  DeviceFileProperties,
   DeviceOverview,
   FilterInfo,
   Package,
@@ -14,18 +16,26 @@ import type {
 } from './types';
 import {
   executeMockSql,
+  copyMockDevicePath,
+  createMockDeviceDirectory,
+  deleteMockDevicePath,
+  downloadMockDeviceFile,
   getMockAppConfig,
+  getMockDeviceFileProperties,
+  getMockDeviceFilePreview,
   getMockDeviceOverview,
   listMockDeviceFiles,
   getMockTableData,
   getMockTableSchema,
   getMockLogcatLogs,
   listMockDatabases,
+  moveMockDevicePath,
   listMockDevices,
   listMockPackages,
   listMockTables,
   saveMockAppConfig,
   syncMockChanges,
+  uploadMockDeviceFile,
 } from "./mock-adb";
 
 const isTauriRuntime = () =>
@@ -55,6 +65,71 @@ export async function listDeviceFiles(
 ): Promise<DeviceFileEntry[]> {
   if (shouldUseMockAdb()) return listMockDeviceFiles(deviceId, path);
   return invoke("list_device_files", { deviceId, path });
+}
+
+export async function downloadDeviceFile(deviceId: string, remotePath: string): Promise<string> {
+  if (shouldUseMockAdb()) return downloadMockDeviceFile(deviceId, remotePath);
+  return invoke("download_device_file", { deviceId, remotePath });
+}
+
+export async function createDeviceDirectory(deviceId: string, remotePath: string): Promise<void> {
+  if (shouldUseMockAdb()) return createMockDeviceDirectory(deviceId, remotePath);
+  return invoke("create_device_directory", { deviceId, remotePath });
+}
+
+export async function uploadDeviceFile(
+  deviceId: string,
+  destinationDir: string,
+  fileName: string,
+  data: Uint8Array
+): Promise<string> {
+  if (shouldUseMockAdb()) return uploadMockDeviceFile(deviceId, destinationDir, fileName, data);
+  return invoke("upload_device_file", {
+    deviceId,
+    destinationDir,
+    fileName,
+    data: Array.from(data),
+  });
+}
+
+export async function deleteDevicePath(deviceId: string, remotePath: string): Promise<void> {
+  if (shouldUseMockAdb()) return deleteMockDevicePath(deviceId, remotePath);
+  return invoke("delete_device_path", { deviceId, remotePath });
+}
+
+export async function moveDevicePath(
+  deviceId: string,
+  sourcePath: string,
+  destinationPath: string
+): Promise<void> {
+  if (shouldUseMockAdb()) return moveMockDevicePath(deviceId, sourcePath, destinationPath);
+  return invoke("move_device_path", { deviceId, sourcePath, destinationPath });
+}
+
+export async function copyDevicePath(
+  deviceId: string,
+  sourcePath: string,
+  destinationPath: string
+): Promise<void> {
+  if (shouldUseMockAdb()) return copyMockDevicePath(deviceId, sourcePath, destinationPath);
+  return invoke("copy_device_path", { deviceId, sourcePath, destinationPath });
+}
+
+export async function getDeviceFileProperties(
+  deviceId: string,
+  remotePath: string
+): Promise<DeviceFileProperties> {
+  if (shouldUseMockAdb()) return getMockDeviceFileProperties(deviceId, remotePath);
+  return invoke("get_device_file_properties", { deviceId, remotePath });
+}
+
+export async function getDeviceFilePreview(
+  deviceId: string,
+  remotePath: string,
+  maxBytes = 8 * 1024 * 1024
+): Promise<DeviceFilePreview> {
+  if (shouldUseMockAdb()) return getMockDeviceFilePreview(deviceId, remotePath, maxBytes);
+  return invoke("get_device_file_preview", { deviceId, remotePath, maxBytes });
 }
 
 export async function getLogcatLogs(
