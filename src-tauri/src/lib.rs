@@ -26,6 +26,14 @@ pub fn run() {
             presentation::commands::get_device_overview,
             presentation::commands::get_logcat_logs,
             presentation::commands::list_device_files,
+            presentation::commands::download_device_file,
+            presentation::commands::create_device_directory,
+            presentation::commands::upload_device_file,
+            presentation::commands::delete_device_path,
+            presentation::commands::move_device_path,
+            presentation::commands::copy_device_path,
+            presentation::commands::get_device_file_properties,
+            presentation::commands::get_device_file_preview,
             presentation::commands::list_databases,
             presentation::commands::list_tables,
             presentation::commands::get_table_schema,
@@ -34,6 +42,8 @@ pub fn run() {
             presentation::commands::sync_changes,
             presentation::commands::get_app_config,
             presentation::commands::save_app_config,
+            presentation::commands::list_running_processes,
+            presentation::commands::force_stop_app,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

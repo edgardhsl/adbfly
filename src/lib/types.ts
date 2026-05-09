@@ -22,9 +22,34 @@ export interface DeviceFileEntry {
   size_bytes?: number;
 }
 
+export interface DeviceFileProperties {
+  name: string;
+  full_path: string;
+  is_directory: boolean;
+  size_bytes?: number;
+  modified_at?: string;
+  permissions?: string;
+}
+
+export interface DeviceFilePreview {
+  name: string;
+  full_path: string;
+  mime_type: string;
+  content_base64: string;
+  truncated: boolean;
+}
+
 export interface Package {
   name: string;
   label?: string;
+}
+
+export interface RunningApp {
+  pid: number;
+  name: string;
+  package_name: string;
+  ram_kb: number;
+  cpu_percent: number;
 }
 
 export interface DatabaseInfo {

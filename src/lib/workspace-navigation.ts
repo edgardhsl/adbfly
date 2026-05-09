@@ -1,8 +1,8 @@
-import { Database, FileText, FolderTree, PackagePlus, ShieldCheck, Smartphone } from "lucide-react";
+import { Activity, Database, FileText, FolderTree, PackagePlus, ShieldCheck, Smartphone } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { TranslationKeys } from "@/lib/i18n";
 
-export type WorkspaceView = "overview" | "databases" | "fileExplorer" | "logcat" | "settings";
+export type WorkspaceView = "overview" | "databases" | "fileExplorer" | "runningApps" | "logcat" | "settings";
 
 type NavigationItemBase = {
   id: string;
@@ -34,6 +34,7 @@ type NavigationFlags = {
   canOpenOverview: boolean;
   canOpenDatabases: boolean;
   canOpenFileExplorer: boolean;
+  canOpenRunningApps: boolean;
   canOpenLogcat: boolean;
   hasSelectedDevice: boolean;
 };
@@ -81,7 +82,7 @@ export function buildNavigationGroups(
           enabled: true,
           visible: flags.canOpenDatabases,
         },
-        {
+{
           kind: "view",
           id: "file-explorer",
           icon: FolderTree,
@@ -90,6 +91,16 @@ export function buildNavigationGroups(
           helper: t.navigation.fileExplorerHelper,
           enabled: true,
           visible: flags.canOpenFileExplorer,
+        },
+        {
+          kind: "view",
+          id: "running-apps",
+          icon: Activity,
+          label: t.navigation.runningApps,
+          view: "runningApps",
+          helper: t.navigation.runningAppsHelper,
+          enabled: true,
+          visible: flags.canOpenRunningApps,
         },
         {
           kind: "view",
@@ -154,8 +165,12 @@ export function buildBreadcrumbs(t: TranslationKeys, workspaceView: WorkspaceVie
     return [t.breadcrumbs.workspace, t.breadcrumbs.logcat];
   }
 
-  if (workspaceView === "fileExplorer") {
+if (workspaceView === "fileExplorer") {
     return [t.breadcrumbs.workspace, t.breadcrumbs.fileExplorer];
+  }
+
+  if (workspaceView === "runningApps") {
+    return [t.breadcrumbs.workspace, t.breadcrumbs.runningApps];
   }
 
   return [t.breadcrumbs.workspace, t.breadcrumbs.overview];

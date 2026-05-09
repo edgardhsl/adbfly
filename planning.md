@@ -1,12 +1,12 @@
 # Planning de Funcionalidades - ADB Fly
 
 ## Contexto Global (acima da navegação)
-- Dispositivo conectado (`planned`) - `feature/dispositivo_conectado#minor`
-- App selecionado (`planned`) - `feature/app_selecionado#minor`
-- Busca global da sidebar (`planned`) - `feature/busca_global_sidebar#minor`
+- Dispositivo conectado (`done`) - `feature/connected_device#minor`
+- App selecionado (`done`) - `feature/selected_app#minor`
+- Busca global da sidebar (`partial`) - `feature/sidebar_global_search#minor`
 
 ## Device
-- Overview (`planned`) - `feature/device_overview#minor`
+- Overview (`done`) - `feature/device_overview#minor`
 - File Explorer (`done`) - `feature/device_file_explorer#minor`
 - Running Apps (`planned`) - `feature/device_running_apps#minor`
 - Processes (`planned`) - `feature/device_processes#minor`

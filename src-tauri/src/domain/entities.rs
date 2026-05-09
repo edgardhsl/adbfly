@@ -34,6 +34,34 @@ pub struct DeviceFileEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeviceFileProperties {
+    pub name: String,
+    pub full_path: String,
+    pub is_directory: bool,
+    pub size_bytes: Option<u64>,
+    pub modified_at: Option<String>,
+    pub permissions: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeviceFilePreview {
+    pub name: String,
+    pub full_path: String,
+    pub mime_type: String,
+    pub content_base64: String,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RunningApp {
+    pub pid: u32,
+    pub name: String,
+    pub package_name: String,
+    pub ram_kb: u64,
+    pub cpu_percent: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DatabaseInfo {
     pub name: String,
     pub path: String,

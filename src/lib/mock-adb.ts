@@ -3,9 +3,12 @@ import type {
   DatabaseInfo,
   Device,
   DeviceFileEntry,
+  DeviceFilePreview,
+  DeviceFileProperties,
   DeviceOverview,
   FilterInfo,
   Package,
+  RunningApp,
   SortInfo,
   SqlResult,
   TableData,
@@ -117,6 +120,24 @@ const mockFileTree: Record<string, DeviceFileEntry[]> = {
   "/sdcard/Documents": [
     { name: "readme.md", full_path: "/sdcard/Documents/readme.md", is_directory: false, size_bytes: 3021 },
   ],
+};
+
+const ensureDir = (path: string) => {
+  if (!mockFileTree[path]) {
+    mockFileTree[path] = [];
+  }
+};
+
+const parentDir = (path: string) => {
+  if (path === "/") return "/";
+  const index = path.lastIndexOf("/");
+  if (index <= 0) return "/";
+  return path.slice(0, index);
+};
+
+const basename = (path: string) => {
+  const idx = path.lastIndexOf("/");
+  return idx >= 0 ? path.slice(idx + 1) : path;
 };
 
 const normalize = (value: unknown) => String(value ?? "").toLowerCase();
@@ -294,4 +315,251 @@ export async function listMockDeviceFiles(
   await delay();
   const target = path?.trim() ? path.trim() : "/sdcard";
   return mockFileTree[target] ?? [];
+}
+
+export async function downloadMockDeviceFile(
+  _deviceId: string,
+  remotePath: string
+): Promise<string> {
+  await delay();
+  return `/mock-downloads/${basename(remotePath) || "download.bin"}`;
+}
+
+export async function createMockDeviceDirectory(
+  _deviceId: string,
+  remotePath: string
+): Promise<void> {
+  await delay();
+  const dir = parentDir(remotePath);
+  ensureDir(dir);
+  const name = basename(remotePath);
+  if (!name) return;
+
+  if (!(mockFileTree[dir] ?? []).some((entry) => entry.full_path === remotePath)) {
+    mockFileTree[dir].push({
+      name,
+      full_path: remotePath,
+      is_directory: true,
+    });
+  }
+  ensureDir(remotePath);
+}
+
+export async function uploadMockDeviceFile(
+  _deviceId: string,
+  destinationDir: string,
+  fileName: string,
+  data: Uint8Array
+): Promise<string> {
+  await delay();
+  ensureDir(destinationDir);
+  const destinationPath = `${destinationDir.replace(/\/$/, "")}/${fileName}`;
+  const list = mockFileTree[destinationDir];
+  const existingIndex = list.findIndex((entry) => entry.full_path === destinationPath);
+  const payload: DeviceFileEntry = {
+    name: fileName,
+    full_path: destinationPath,
+    is_directory: false,
+    size_bytes: data.byteLength,
+  };
+  if (existingIndex >= 0) {
+    list[existingIndex] = payload;
+  } else {
+    list.push(payload);
+  }
+  return destinationPath;
+}
+
+export async function deleteMockDevicePath(
+  _deviceId: string,
+  remotePath: string
+): Promise<void> {
+  await delay();
+  const dir = parentDir(remotePath);
+  const name = basename(remotePath);
+  const entries = mockFileTree[dir] ?? [];
+  const target = entries.find((entry) => entry.name === name);
+  mockFileTree[dir] = entries.filter((entry) => entry.name !== name);
+
+  if (target?.is_directory) {
+    const prefix = `${remotePath}/`;
+    Object.keys(mockFileTree).forEach((key) => {
+      if (key === remotePath || key.startsWith(prefix)) {
+        delete mockFileTree[key];
+      }
+    });
+  }
+}
+
+export async function moveMockDevicePath(
+  _deviceId: string,
+  sourcePath: string,
+  destinationPath: string
+): Promise<void> {
+  await delay();
+  const sourceDir = parentDir(sourcePath);
+  const sourceName = basename(sourcePath);
+  const destinationDir = parentDir(destinationPath);
+  const destinationName = basename(destinationPath);
+
+  const sourceEntries = mockFileTree[sourceDir] ?? [];
+  const target = sourceEntries.find((entry) => entry.name === sourceName);
+  if (!target) return;
+
+  mockFileTree[sourceDir] = sourceEntries.filter((entry) => entry.name !== sourceName);
+  ensureDir(destinationDir);
+  mockFileTree[destinationDir].push({
+    ...target,
+    name: destinationName,
+    full_path: destinationPath,
+  });
+
+  if (target.is_directory) {
+    const movedSubtree = mockFileTree[sourcePath] ?? [];
+    delete mockFileTree[sourcePath];
+    mockFileTree[destinationPath] = movedSubtree.map((entry) => ({
+      ...entry,
+      full_path: entry.full_path.replace(`${sourcePath}/`, `${destinationPath}/`),
+    }));
+
+    const sourcePrefix = `${sourcePath}/`;
+    const destinationPrefix = `${destinationPath}/`;
+    for (const key of Object.keys(mockFileTree)) {
+      if (!key.startsWith(sourcePrefix)) continue;
+      const moved = mockFileTree[key];
+      delete mockFileTree[key];
+      mockFileTree[key.replace(sourcePrefix, destinationPrefix)] = moved.map((entry) => ({
+        ...entry,
+        full_path: entry.full_path.replace(sourcePrefix, destinationPrefix),
+      }));
+    }
+  }
+}
+
+export async function copyMockDevicePath(
+  _deviceId: string,
+  sourcePath: string,
+  destinationPath: string
+): Promise<void> {
+  await delay();
+  const sourceDir = parentDir(sourcePath);
+  const sourceName = basename(sourcePath);
+  const destinationDir = parentDir(destinationPath);
+  const destinationName = basename(destinationPath);
+  const target = (mockFileTree[sourceDir] ?? []).find((entry) => entry.name === sourceName);
+  if (!target) return;
+
+  ensureDir(destinationDir);
+  mockFileTree[destinationDir].push({
+    ...target,
+    name: destinationName,
+    full_path: destinationPath,
+  });
+
+  if (target.is_directory) {
+    const sourcePrefix = `${sourcePath}/`;
+    const destinationPrefix = `${destinationPath}/`;
+    mockFileTree[destinationPath] = (mockFileTree[sourcePath] ?? []).map((entry) => ({
+      ...entry,
+      full_path: entry.full_path.replace(sourcePrefix, destinationPrefix),
+    }));
+
+    for (const key of Object.keys(mockFileTree)) {
+      if (!key.startsWith(sourcePrefix)) continue;
+      const copiedKey = key.replace(sourcePrefix, destinationPrefix);
+      mockFileTree[copiedKey] = (mockFileTree[key] ?? []).map((entry) => ({
+        ...entry,
+        full_path: entry.full_path.replace(sourcePrefix, destinationPrefix),
+      }));
+    }
+  }
+}
+
+export async function getMockDeviceFileProperties(
+  _deviceId: string,
+  remotePath: string
+): Promise<DeviceFileProperties> {
+  await delay();
+  const dir = parentDir(remotePath);
+  const entry = (mockFileTree[dir] ?? []).find((item) => item.full_path === remotePath);
+
+  return {
+    name: basename(remotePath),
+    full_path: remotePath,
+    is_directory: entry?.is_directory ?? false,
+    size_bytes: entry?.size_bytes,
+    modified_at: "Apr 24 12:10",
+    permissions: entry?.is_directory ? "drwxr-xr-x" : "-rw-r--r--",
+  };
+}
+
+const textToBase64 = (value: string) => {
+  if (typeof window !== "undefined" && typeof window.btoa === "function") {
+    const bytes = new TextEncoder().encode(value);
+    let binary = "";
+    bytes.forEach((byte) => {
+      binary += String.fromCharCode(byte);
+    });
+    return window.btoa(binary);
+  }
+  return Buffer.from(value, "utf-8").toString("base64");
+};
+
+export async function getMockDeviceFilePreview(
+  _deviceId: string,
+  remotePath: string,
+  maxBytes = 8 * 1024 * 1024
+): Promise<DeviceFilePreview> {
+  await delay();
+  const name = basename(remotePath);
+  const ext = (name.split(".").pop() || "").toLowerCase();
+  const mimeByExt: Record<string, string> = {
+    png: "image/png",
+    jpg: "image/jpeg",
+    jpeg: "image/jpeg",
+    webp: "image/webp",
+    gif: "image/gif",
+    mp4: "video/mp4",
+    mp3: "audio/mpeg",
+    wav: "audio/wav",
+    pdf: "application/pdf",
+    txt: "text/plain",
+    md: "text/plain",
+    json: "application/json",
+    csv: "text/plain",
+  };
+  const mimeType = mimeByExt[ext] ?? "application/octet-stream";
+
+  const contentText =
+    mimeType === "application/json"
+      ? JSON.stringify({ file: name, preview: true }, null, 2)
+      : `Preview content for ${name}\nPath: ${remotePath}`;
+
+  const bytes = new TextEncoder().encode(contentText);
+  const clipped = bytes.slice(0, maxBytes);
+  const contentBase64 = textToBase64(new TextDecoder().decode(clipped));
+
+return {
+    name,
+    full_path: remotePath,
+    mime_type: mimeType,
+    content_base64: contentBase64,
+    truncated: clipped.length < bytes.length,
+  };
+}
+
+export function getMockRunningProcesses(): RunningApp[] {
+  return [
+    { pid: 1234, name: "com.android.systemui", package_name: "android.systemui", ram_kb: 256000, cpu_percent: 2.5 },
+    { pid: 2345, name: "com.android.launcher", package_name: "android.launcher", ram_kb: 189000, cpu_percent: 1.2 },
+    { pid: 3456, name: "com.android.chrome", package_name: "android.chrome", ram_kb: 320000, cpu_percent: 5.8 },
+    { pid: 4567, name: "com.example.myapp", package_name: "example.myapp", ram_kb: 45000, cpu_percent: 0.8 },
+    { pid: 5678, name: "com.android.phone", package_name: "android.phone", ram_kb: 67000, cpu_percent: 0.5 },
+    { pid: 6789, name: "com.android.mms", package_name: "android.mms", ram_kb: 34000, cpu_percent: 0.3 },
+    { pid: 7890, name: "com.google.android.gms", package_name: "google.android.gms", ram_kb: 156000, cpu_percent: 1.1 },
+  ];
+}
+
+export async function forceStopMockApp(_packageName: string): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 300));
 }

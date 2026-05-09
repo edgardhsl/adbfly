@@ -7,8 +7,8 @@ import dynamic from "next/dynamic";
 import { listen } from "@tauri-apps/api/event";
 import { toast } from "sonner";
 import { type ChartConfig } from "@/components/ui/chart";
-import { listDevices, listPackages, getDeviceOverview, listDeviceFiles, getLogcatLogs, listDatabases, listTables, getTableData, getTableSchema, executeSql, getAppConfig, saveAppConfig } from "@/lib/api";
-import type { AppConfig, DeviceFileEntry, SortInfo, FilterInfo, TableSchema } from "@/lib/types";
+import { listDevices, listPackages, getDeviceOverview, listDeviceFiles, downloadDeviceFile, createDeviceDirectory, uploadDeviceFile, deleteDevicePath, moveDevicePath, copyDevicePath, getDeviceFileProperties, getDeviceFilePreview, getLogcatLogs, listDatabases, listTables, getTableData, getTableSchema, executeSql, getAppConfig, saveAppConfig, listRunningProcesses, forceStopApp } from "@/lib/api";
+import type { AppConfig, DeviceFileEntry, RunningApp, SortInfo, FilterInfo, TableSchema } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { compileLogcatFilterQuery, filterLogcatLines, mergeLogSnapshots } from "@/lib/logcat-utils";
 import { useI18n, I18nProvider } from "@/lib/I18nContext";
@@ -20,6 +20,7 @@ import { WorkspaceSidebar } from "@/components/workspace/workspace-sidebar";
 import { DatabaseWorkspace } from "@/components/workspace/database-workspace";
 import { FileExplorerWorkspace } from "@/components/workspace/file-explorer-workspace";
 import { LogcatWorkspace } from "@/components/workspace/logcat-workspace";
+import { RunningAppsWorkspace } from "@/components/workspace/running-apps-workspace";
 import { SettingsWorkspace } from "@/components/workspace/settings-workspace";
 import { useWorkspaceState } from "@/hooks/use-workspace-state";
 
@@ -293,7 +294,20 @@ function AppContent() {
     queryKey: ["fileExplorer", selectedDevice, workspaceView, fileExplorerPath],
     queryFn: () =>
       selectedDevice ? listDeviceFiles(selectedDevice, fileExplorerPath) : Promise.resolve([] as DeviceFileEntry[]),
-    enabled: !!selectedDevice && workspaceView === "fileExplorer",
+enabled: !!selectedDevice && workspaceView === "fileExplorer",
+    staleTime: 0,
+    retry: 1,
+  });
+
+  const {
+    data: runningApps = [],
+    isFetching: fetchingRunningApps,
+    refetch: refetchRunningApps,
+  } = useQuery({
+    queryKey: ["runningApps", selectedDevice, workspaceView],
+    queryFn: () =>
+      selectedDevice ? listRunningProcesses(selectedDevice) : Promise.resolve([] as RunningApp[]),
+    enabled: !!selectedDevice && workspaceView === "runningApps",
     staleTime: 0,
     retry: 1,
   });
@@ -710,9 +724,10 @@ function AppContent() {
     return false;
   };
 
-  const {
+const {
     isDatabaseView,
     isFileExplorerView,
+    isRunningAppsView,
     isLogcatView,
     isSettingsView,
     showOverview,
@@ -722,6 +737,7 @@ function AppContent() {
     canOpenOverview,
     canOpenDatabases,
     canOpenFileExplorer,
+    canOpenRunningApps,
     canOpenLogcat,
     navGroups,
     breadcrumbItems,
@@ -957,6 +973,106 @@ function AppContent() {
                 onGoRoot={() => setFileExplorerPath(FILE_EXPLORER_ROOT_PATH)}
                 onRetry={() => {
                   void refetchFileExplorer();
+                }}
+                onDownload={async (entry) => {
+                  if (!selectedDevice || entry.is_directory) return;
+                  try {
+                    const localPath = await downloadDeviceFile(selectedDevice, entry.full_path);
+                    toast.success(t.actions.download, {
+                      description: localPath,
+                    });
+                  } catch (error) {
+                    toast.error(t.errors.loadFailed, { description: String(error) });
+                  }
+                }}
+                onCreateFolder={async (remotePath) => {
+                  if (!selectedDevice) return;
+                  try {
+                    await createDeviceDirectory(selectedDevice, remotePath);
+                    toast.success(t.actions.createFolder);
+                    await refetchFileExplorer();
+                  } catch (error) {
+                    toast.error(t.errors.saveFailed, { description: String(error) });
+                  }
+                }}
+                onUploadFile={async (file, destinationDir) => {
+                  if (!selectedDevice) return;
+                  try {
+                    const buffer = await file.arrayBuffer();
+                    const uploadedPath = await uploadDeviceFile(
+                      selectedDevice,
+                      destinationDir,
+                      file.name,
+                      new Uint8Array(buffer)
+                    );
+                    toast.success(t.actions.uploadFile, { description: uploadedPath });
+                    await refetchFileExplorer();
+                  } catch (error) {
+                    toast.error(t.errors.saveFailed, { description: String(error) });
+                  }
+                }}
+                onDelete={async (entry) => {
+                  if (!selectedDevice) return;
+                  try {
+                    await deleteDevicePath(selectedDevice, entry.full_path);
+                    toast.success(t.actions.delete);
+                    await refetchFileExplorer();
+                  } catch (error) {
+                    toast.error(t.errors.deleteFailed, { description: String(error) });
+                  }
+                }}
+                onMove={async (entry, destinationPath) => {
+                  if (!selectedDevice) return;
+                  try {
+                    await moveDevicePath(selectedDevice, entry.full_path, destinationPath);
+                    toast.success(t.actions.move);
+                    await refetchFileExplorer();
+                  } catch (error) {
+                    toast.error(t.errors.saveFailed, { description: String(error) });
+                  }
+                }}
+                onCopy={async (entry, destinationPath) => {
+                  if (!selectedDevice) return;
+                  try {
+                    await copyDevicePath(selectedDevice, entry.full_path, destinationPath);
+                    toast.success(t.actions.copy);
+                    await refetchFileExplorer();
+                  } catch (error) {
+                    toast.error(t.errors.saveFailed, { description: String(error) });
+                  }
+                }}
+                onGetProperties={async (entry) => {
+                  if (!selectedDevice) {
+                    throw new Error(t.main.connectDeviceOverlay);
+                  }
+                  return getDeviceFileProperties(selectedDevice, entry.full_path);
+                }}
+onPreview={async (entry) => {
+                  if (!selectedDevice) {
+                    throw new Error(t.main.connectDeviceOverlay);
+                  }
+                  return getDeviceFilePreview(selectedDevice, entry.full_path);
+                }}
+              />
+            )}
+
+            {isRunningAppsView && (
+              <RunningAppsWorkspace
+                theme={theme}
+                t={t}
+                deviceId={selectedDevice || ""}
+                runningApps={runningApps}
+                loading={fetchingRunningApps}
+                onRefresh={() => void refetchRunningApps()}
+                onForceStop={async (packageName) => {
+                  if (!selectedDevice) return;
+                  try {
+                    await forceStopApp(selectedDevice, packageName);
+                    toast.success(t.actions.forceStopped || "App stopped");
+                    await refetchRunningApps();
+                  } catch (error) {
+                    toast.error(t.errors.deleteFailed, { description: String(error) });
+                  }
                 }}
               />
             )}

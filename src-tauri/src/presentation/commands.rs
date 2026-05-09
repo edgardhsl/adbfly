@@ -94,6 +94,126 @@ pub async fn list_device_files(
 }
 
 #[tauri::command]
+pub async fn download_device_file(
+    state: State<'_, SharedAppState>,
+    device_id: String,
+    remote_path: String,
+) -> Result<String, String> {
+    run_with_state(state, move |app_state| {
+        app_state
+            .device_use_cases
+            .download_device_file(&device_id, &remote_path)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn create_device_directory(
+    state: State<'_, SharedAppState>,
+    device_id: String,
+    remote_path: String,
+) -> Result<(), String> {
+    run_with_state(state, move |app_state| {
+        app_state
+            .device_use_cases
+            .create_device_directory(&device_id, &remote_path)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn upload_device_file(
+    state: State<'_, SharedAppState>,
+    device_id: String,
+    destination_dir: String,
+    file_name: String,
+    data: Vec<u8>,
+) -> Result<String, String> {
+    run_with_state(state, move |app_state| {
+        app_state.device_use_cases.upload_device_file(
+            &device_id,
+            &destination_dir,
+            &file_name,
+            &data,
+        )
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn delete_device_path(
+    state: State<'_, SharedAppState>,
+    device_id: String,
+    remote_path: String,
+) -> Result<(), String> {
+    run_with_state(state, move |app_state| {
+        app_state
+            .device_use_cases
+            .delete_device_path(&device_id, &remote_path)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn move_device_path(
+    state: State<'_, SharedAppState>,
+    device_id: String,
+    source_path: String,
+    destination_path: String,
+) -> Result<(), String> {
+    run_with_state(state, move |app_state| {
+        app_state
+            .device_use_cases
+            .move_device_path(&device_id, &source_path, &destination_path)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn copy_device_path(
+    state: State<'_, SharedAppState>,
+    device_id: String,
+    source_path: String,
+    destination_path: String,
+) -> Result<(), String> {
+    run_with_state(state, move |app_state| {
+        app_state
+            .device_use_cases
+            .copy_device_path(&device_id, &source_path, &destination_path)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn get_device_file_properties(
+    state: State<'_, SharedAppState>,
+    device_id: String,
+    remote_path: String,
+) -> Result<crate::domain::entities::DeviceFileProperties, String> {
+    run_with_state(state, move |app_state| {
+        app_state
+            .device_use_cases
+            .get_device_file_properties(&device_id, &remote_path)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn get_device_file_preview(
+    state: State<'_, SharedAppState>,
+    device_id: String,
+    remote_path: String,
+    max_bytes: Option<usize>,
+) -> Result<crate::domain::entities::DeviceFilePreview, String> {
+    run_with_state(state, move |app_state| {
+        app_state
+            .device_use_cases
+            .get_device_file_preview(&device_id, &remote_path, max_bytes)
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn list_databases(
     state: State<'_, SharedAppState>,
     device_id: String,
@@ -322,4 +442,27 @@ pub async fn save_app_config(
     apply_openssl_env(&normalized);
 
     Ok(normalized)
+}
+
+#[tauri::command]
+pub async fn list_running_processes(
+    state: State<'_, SharedAppState>,
+    device_id: String,
+) -> Result<Vec<crate::domain::entities::RunningApp>, String> {
+    run_with_state(state, move |app_state| {
+        app_state.device_use_cases.list_running_processes(&device_id)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn force_stop_app(
+    state: State<'_, SharedAppState>,
+    device_id: String,
+    package_name: String,
+) -> Result<(), String> {
+    run_with_state(state, move |app_state| {
+        app_state.device_use_cases.force_stop(&device_id, &package_name)
+    })
+    .await
 }
