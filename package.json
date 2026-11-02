@@ -13,7 +13,7 @@
     "dev:tauri": "node --max-old-space-size=2048 ./node_modules/next/dist/bin/next dev --webpack --port 3000",
     "build": "next build",
     "start": "next start",
-    "lint": "npm run typecheck",
+    "lint": "eslint .",
     "design:audit": "impeccable detect src/app/page.tsx src/app/globals.css src/components/ui",
     "design:audit:fast": "impeccable detect --fast src/",
     "design:live": "impeccable live",
@@ -68,6 +68,8 @@
     "postcss": "^8",
     "tailwindcss": "^3.4.17",
     "tailwindcss-animate": "^1.0.7",
-    "typescript": "^5"
+    "typescript": "^5",
+    "eslint": "9.39.5",
+    "eslint-config-next": "16.2.0"
   }
 }
