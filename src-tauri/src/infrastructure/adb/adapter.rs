@@ -131,7 +131,8 @@ impl AdbAdapter {
     }
 
     pub fn list_packages(&self, device_id: &str) -> Result<Vec<Package>, String> {
-        let third_party_output = self.run(&["-s", device_id, "shell", "pm", "list", "packages", "-3"])?;
+        let third_party_output =
+            self.run(&["-s", device_id, "shell", "pm", "list", "packages", "-3"])?;
 
         let mut packages: Vec<Package> = third_party_output
             .lines()
@@ -144,7 +145,8 @@ impl AdbAdapter {
             .collect();
 
         if packages.is_empty() {
-            let all_packages_output = self.run(&["-s", device_id, "shell", "pm", "list", "packages"])?;
+            let all_packages_output =
+                self.run(&["-s", device_id, "shell", "pm", "list", "packages"])?;
             packages = all_packages_output
                 .lines()
                 .filter_map(|line| {

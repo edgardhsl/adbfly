@@ -77,15 +77,16 @@ impl SqliteRepository {
 
                 #[cfg(feature = "sqlcipher")]
                 {
-                let escaped_key = trimmed_key.replace('\'', "''");
-                conn.execute_batch(&format!("PRAGMA key = '{}';", escaped_key))
-                    .map_err(|e| format!("Failed to apply SQLCipher key: {}", e))?;
+                    let escaped_key = trimmed_key.replace('\'', "''");
+                    conn.execute_batch(&format!("PRAGMA key = '{}';", escaped_key))
+                        .map_err(|e| format!("Failed to apply SQLCipher key: {}", e))?;
                 }
             }
         }
 
-        match conn.query_row("SELECT count(*) FROM sqlite_master", [], |row| row.get::<_, i64>(0))
-        {
+        match conn.query_row("SELECT count(*) FROM sqlite_master", [], |row| {
+            row.get::<_, i64>(0)
+        }) {
             Ok(_) => Ok(conn),
             Err(error) => {
                 let error_text = error.to_string().to_lowercase();
@@ -95,8 +96,10 @@ impl SqliteRepository {
                     } else {
                         #[cfg(feature = "sqlcipher")]
                         {
-                            Err("This database appears to be encrypted. Provide a SQLCipher key."
-                                .to_string())
+                            Err(
+                                "This database appears to be encrypted. Provide a SQLCipher key."
+                                    .to_string(),
+                            )
                         }
                         #[cfg(not(feature = "sqlcipher"))]
                         {
