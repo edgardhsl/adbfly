@@ -441,6 +441,8 @@ impl AdbAdapter {
         package: &str,
         relative_db: &str,
         data: &[u8],
+        expected_db: &[u8],
+        expected_wal: Option<&[u8]>,
     ) -> Result<(), String> {
         validate_write_destination(relative_db)?;
         let backup_db = format!("{}.adbfly-backup", relative_db);
@@ -473,6 +475,17 @@ impl AdbAdapter {
         if let Err(error) = stage_result {
             let _ = run_private(&format!("rm -f -- {}", q(&staged)?));
             return Err(error);
+        }
+
+        // The upload may take seconds. Stop the app again and compare the
+        // source immediately before the remote transaction begins.
+        let stop_cmd = format!("am force-stop {}", shell_quote(package)?);
+        self.shell_with_timeout(device_id, &stop_cmd, Duration::from_secs(DEFAULT_TIMEOUT_SECS))?;
+        let live_db = self.pull_app_file_snapshot(device_id, package, relative_db)?;
+        let live_wal = self.pull_app_file_snapshot_optional(device_id, package, &wal)?;
+        if live_db != expected_db || live_wal.as_deref() != expected_wal {
+            let _ = run_private(&format!("rm -f -- {}", q(&staged)?));
+            return Err("Android SQLite changed while the new database was being staged. Write aborted.".to_string());
         }
 
         let commit = format!(
