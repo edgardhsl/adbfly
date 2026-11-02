@@ -123,7 +123,7 @@ Si no está configurado, la app inicia con fallback SQLite.
 
 ## Licencia
 
-Licencia MIT - consulta el archivo [LICENSE](LICENSE).
+Licenciado bajo la GNU General Public License v3.0 (GPL-3.0). Consulta el archivo [LICENSE](LICENSE).
 
 ---
 
