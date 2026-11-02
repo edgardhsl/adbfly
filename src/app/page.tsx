@@ -11,6 +11,7 @@ import { listDevices, listPackages, getDeviceOverview, listDeviceFiles, getLogca
 import type { AppConfig, DeviceFileEntry, SortInfo, FilterInfo, TableSchema } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { compileLogcatFilterQuery, filterLogcatLines, mergeLogSnapshots } from "@/lib/logcat-utils";
+import { buildSqliteUpdateBatches } from "@/lib/sqlite-update-batches";
 import { useI18n, I18nProvider } from "@/lib/I18nContext";
 import type { Locale } from "@/lib/i18n";
 import { OVERVIEW_USAGE_HISTORY, type UsageHistoryPoint, type WorkspaceView } from "@/lib/workspace-navigation";
@@ -538,26 +539,32 @@ function AppContent() {
     setSavingPendingRows(true);
 
     const failed: Record<string, PendingRowEdit> = {};
+    let batches;
+    try {
+      batches = buildSqliteUpdateBatches(selectedTable, pkColumn, entries.map(([rowKey, edit]) => ({
+        rowKey, pkValue: edit.pkValue, changes: edit.changes,
+      })));
+    } catch (error) {
+      console.error("SQLite batch validation:", error);
+      setSavingPendingRows(false);
+      toast.error("Falha ao preparar alterações", { description: String(error) });
+      return;
+    }
 
-    for (const [rowKey, rowEdit] of entries) {
-      const changes = Object.entries(rowEdit.changes);
-      const assignments = changes
-        .map(([column]) => `${quoteSqlIdentifier(column)} = ?`)
-        .join(", ");
-
-      if (!assignments) continue;
-
-      const sql = `UPDATE ${quoteSqlIdentifier(selectedTable)} SET ${assignments} WHERE ${quoteSqlIdentifier(pkColumn)} = ?`;
-      const params = [...changes.map(([, value]) => value), rowEdit.pkValue] as Array<string | number | null>;
-
+    for (const batch of batches) {
       try {
-        const result = await executeSql(selectedDevice, selectedPackage, selectedDb, sql, databaseKeys[selectedDb], params);
-        if (!result.success) {
-          throw new Error(result.message || "Falha ao executar UPDATE");
+        const result = await executeSql(
+          selectedDevice, selectedPackage, selectedDb, batch.sql, databaseKeys[selectedDb], batch.params
+        );
+        if (!result.success || result.rows_affected !== batch.rowKeys.length) {
+          throw new Error(result.message || "Quantidade de linhas atualizadas não corresponde ao lote.");
         }
       } catch (error) {
-        console.error("Commit row error:", error);
-        failed[rowKey] = rowEdit;
+        console.error("SQLite batch commit:", error);
+        for (const rowKey of batch.rowKeys) {
+          const edit = pendingRowEdits[rowKey];
+          if (edit) failed[rowKey] = edit;
+        }
       }
     }
 
