@@ -5,6 +5,43 @@ use crate::domain::entities::{
 };
 use crate::infrastructure::adb::AdbAdapter;
 
+fn quote_identifier(name: &str) -> Result<String, String> {
+    if name.is_empty() || name.contains('\0') {
+        return Err("Invalid SQLite identifier".to_string());
+    }
+    Ok(format!("\"{}\"", name.replace('"', "\"\"")))
+}
+
+fn has_numeric_affinity(declared_type: &str) -> bool {
+    let kind = declared_type.to_ascii_uppercase();
+    if kind.contains("CHAR") || kind.contains("CLOB") || kind.contains("TEXT") || kind.contains("BLOB") {
+        return false;
+    }
+    kind.contains("INT") || kind.contains("REAL") || kind.contains("FLOA")
+        || kind.contains("DOUB") || kind.contains("NUM") || kind.contains("DEC")
+}
+
+fn to_bound_sql_value(value: &serde_json::Value) -> Result<rusqlite::types::Value, String> {
+    use rusqlite::types::Value;
+    match value {
+        serde_json::Value::Null => Ok(Value::Null),
+        serde_json::Value::Bool(flag) => Ok(Value::Integer(i64::from(*flag))),
+        serde_json::Value::String(text) => Ok(Value::Text(text.clone())),
+        serde_json::Value::Number(number) => {
+            if let Some(integer) = number.as_i64() {
+                return Ok(Value::Integer(integer));
+            }
+            if number.as_u64().is_some() {
+                return Err("Integer parameter outside SQLite i64 range".to_string());
+            }
+            let float = number.as_f64().ok_or("Invalid SQL number")?;
+            if !float.is_finite() { return Err("SQL parameter must be finite".to_string()); }
+            Ok(Value::Real(float))
+        }
+        _ => Err("SQL parameters must be scalar values".to_string()),
+    }
+}
+
 pub struct SqliteRepository {
     adb: AdbAdapter,
 }
@@ -227,7 +264,7 @@ impl SqliteRepository {
         let conn = self.open_connection(&local_path, db_key)?;
 
         let mut stmt = conn
-            .prepare(&format!("PRAGMA table_info('{}')", table))
+            .prepare(&format!("PRAGMA table_info({})", quote_identifier(table)?))
             .map_err(|e| format!("Failed to prepare: {}", e))?;
 
         let columns: Vec<_> = stmt
@@ -266,41 +303,78 @@ impl SqliteRepository {
 
         let conn = self.open_connection(&local_path, db_key)?;
 
-        let mut sql = format!("SELECT * FROM \"{}\"", table);
-        let mut count_sql = format!("SELECT COUNT(*) FROM \"{}\"", table);
+        let table_ident = quote_identifier(table)?;
+        let mut sql = format!("SELECT * FROM {}", table_ident);
+        let mut count_sql = format!("SELECT COUNT(*) FROM {}", table_ident);
 
-        if let Some(filters) = &filters {
-            if !filters.is_empty() {
-                let filter_clauses: Vec<String> = filters
-                    .iter()
-                    .filter(|f| !f.value.is_empty())
-                    .map(|f| {
-                        let val = f.value.trim();
-                        if val.parse::<f64>().is_ok() {
-                            format!("\"{}\" = {}", f.column, val)
-                        } else {
-                            format!("\"{}\" LIKE '%{}%'", f.column, val.replace("'", "''"))
-                        }
-                    })
-                    .collect();
-                if !filter_clauses.is_empty() {
-                    let where_clause = format!(" WHERE {}", filter_clauses.join(" AND "));
-                    sql.push_str(&where_clause);
-                    count_sql.push_str(&where_clause);
+        // Column identifiers must match the schema; values are always bound as parameters.
+        let mut column_types = std::collections::HashMap::<String, String>::new();
+        let mut schema = conn
+            .prepare(&format!("PRAGMA table_info({})", table_ident))
+            .map_err(|e| format!("Failed to inspect table schema: {}", e))?;
+        let columns = schema
+            .query_map([], |row| Ok((row.get::<_, String>(1)?, row.get::<_, String>(2)?)))
+            .map_err(|e| e.to_string())?;
+        for column in columns {
+            let (name, declared_type) = column.map_err(|e| e.to_string())?;
+            column_types.insert(name, declared_type);
+        }
+        if column_types.is_empty() {
+            return Err("Table has no available columns".to_string());
+        }
+
+        let mut filter_values: Vec<rusqlite::types::Value> = Vec::new();
+        if let Some(filters) = filters {
+            let mut clauses = Vec::new();
+            for filter in filters.into_iter().filter(|filter| !filter.value.is_empty()) {
+                if !column_types.contains_key(&filter.column) {
+                    return Err(format!("Unknown filter column: {}", filter.column));
                 }
+                let column = quote_identifier(&filter.column)?;
+                let value = filter.value.trim();
+                if column_types.get(&filter.column).is_some_and(|kind| has_numeric_affinity(kind)) {
+                    if let Ok(number) = value.parse::<i64>() {
+                        clauses.push(format!("{} = ?", column));
+                        filter_values.push(rusqlite::types::Value::Integer(number));
+                        continue;
+                    }
+                    if let Ok(number) = value.parse::<f64>() {
+                        if number.is_finite() {
+                            clauses.push(format!("{} = ?", column));
+                            filter_values.push(rusqlite::types::Value::Real(number));
+                            continue;
+                        }
+                    }
+                }
+                clauses.push(format!("{} LIKE ?", column));
+                filter_values.push(rusqlite::types::Value::Text(format!("%{}%", value)));
+            }
+            if !clauses.is_empty() {
+                let where_clause = format!(" WHERE {}", clauses.join(" AND "));
+                sql.push_str(&where_clause);
+                count_sql.push_str(&where_clause);
             }
         }
 
-        if let Some(sort) = &sort {
-            sql.push_str(&format!(" ORDER BY \"{}\" {}", sort.column, sort.direction));
+        if let Some(sort) = sort {
+            if !column_types.contains_key(&sort.column) {
+                return Err(format!("Unknown sort column: {}", sort.column));
+            }
+            let direction = match sort.direction.to_ascii_uppercase().as_str() {
+                "ASC" => "ASC",
+                "DESC" => "DESC",
+                _ => return Err("Invalid sort direction".to_string()),
+            };
+            sql.push_str(&format!(" ORDER BY {} {}", quote_identifier(&sort.column)?, direction));
         }
 
-        let offset = (page.saturating_sub(1)) * page_size;
-        sql.push_str(&format!(" LIMIT {} OFFSET {}", page_size, offset));
+        let safe_page_size = page_size.clamp(1, 1000);
+        let offset = u64::from(page.saturating_sub(1)) * u64::from(safe_page_size);
+        sql.push_str(&format!(" LIMIT {} OFFSET {}", safe_page_size, offset));
 
         let total_rows: u64 = conn
-            .query_row(&count_sql, [], |row| row.get(0))
-            .unwrap_or(0);
+            .query_row(&count_sql, rusqlite::params_from_iter(filter_values.iter()), |row| row.get(0))
+            .map_err(|e| format!("Failed to count filtered rows: {}", e))?;
 
         let mut stmt = conn
             .prepare(&sql)
@@ -309,7 +383,7 @@ impl SqliteRepository {
         let column_names: Vec<String> = stmt.column_names().iter().map(|s| s.to_string()).collect();
 
         let rows: Vec<serde_json::Value> = stmt
-            .query_map([], |row| {
+            .query_map(rusqlite::params_from_iter(filter_values.iter()), |row| {
                 let mut map = serde_json::Map::new();
                 for (i, name) in column_names.iter().enumerate() {
                     let value: rusqlite::types::Value = row.get(i)?;
@@ -346,11 +420,11 @@ impl SqliteRepository {
         db_name: &str,
         sql: &str,
         db_key: Option<&str>,
+        params: &[serde_json::Value],
     ) -> Result<SqlResult, String> {
-        let is_select = sql.trim().to_uppercase().starts_with("SELECT");
-        if !is_select {
-            self.ensure_package_stopped(device_id, package_name)?;
-        }
+        let bound: Vec<rusqlite::types::Value> = params.iter()
+            .map(to_bound_sql_value)
+            .collect::<Result<_, _>>()?;
         let (_temp_dir, local_path) = self.pull_database(device_id, package_name, db_name)?;
         // Preserve the exact source version so another app write cannot be
         // overwritten while the snapshot is being edited on the host.
@@ -363,6 +437,15 @@ impl SqliteRepository {
             None
         };
         let conn = self.open_connection(&local_path, db_key)?;
+        // Unlike a SELECT prefix, the prepared statement correctly classifies
+        // WITH queries and read-only PRAGMAs without accidentally entering
+        // the multi-file Android write protocol.
+        let is_select = conn.prepare(sql)
+            .map_err(|e| format!("Invalid SQL statement: {}", e))?
+            .readonly();
+        if !is_select {
+            self.ensure_package_stopped(device_id, package_name)?;
+        }
 
         if is_select {
             let mut stmt = conn
@@ -373,7 +456,7 @@ impl SqliteRepository {
                 stmt.column_names().iter().map(|s| s.to_string()).collect();
 
             let rows: Vec<serde_json::Value> = stmt
-                .query_map([], |row| {
+                .query_map(rusqlite::params_from_iter(bound.iter()), |row| {
                     let mut map = serde_json::Map::new();
                     for (i, name) in column_names.iter().enumerate() {
                         let value: rusqlite::types::Value = row.get(i)?;
@@ -409,7 +492,7 @@ impl SqliteRepository {
         }
 
         let rows_affected = conn
-            .execute(sql, [])
+            .execute(sql, rusqlite::params_from_iter(bound.iter()))
             .map_err(|e| format!("Failed to execute: {}", e))? as u64;
         // The pragma returns (busy, log_frames, checkpointed_frames); execute_batch
         // hides this status and can silently accept an incomplete checkpoint.
@@ -464,5 +547,35 @@ impl SqliteRepository {
             rows: vec![],
             rows_affected,
         })
+    }
+}
+
+#[cfg(test)]
+mod security_tests {
+    use super::{has_numeric_affinity, quote_identifier, to_bound_sql_value};
+
+    #[test]
+    fn identifiers_escape_double_quotes() {
+        assert_eq!(quote_identifier("odd\"name").unwrap(), "\"odd\"\"name\"");
+        assert!(quote_identifier("bad\0name").is_err());
+    }
+
+    #[test]
+    fn bound_values_preserve_null_empty_text_and_integer_types() {
+        use rusqlite::types::Value;
+        assert_eq!(to_bound_sql_value(&serde_json::Value::Null).unwrap(), Value::Null);
+        assert_eq!(to_bound_sql_value(&serde_json::json!("")).unwrap(), Value::Text("".to_owned()));
+        assert_eq!(to_bound_sql_value(&serde_json::json!("NULL")).unwrap(), Value::Text("NULL".to_owned()));
+        assert_eq!(to_bound_sql_value(&serde_json::json!(123)).unwrap(), Value::Integer(123));
+        assert!(to_bound_sql_value(&serde_json::json!({"not":"scalar"})).is_err());
+    }
+
+    #[test]
+    fn filter_affinity_preserves_textual_numbers() {
+        assert!(!has_numeric_affinity("TEXT"));
+        assert!(!has_numeric_affinity("VARCHAR(40)"));
+        assert!(!has_numeric_affinity("BLOB"));
+        assert!(has_numeric_affinity("INTEGER"));
+        assert!(has_numeric_affinity("REAL"));
     }
 }
