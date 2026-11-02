@@ -554,7 +554,7 @@ function AppContent() {
     for (const batch of batches) {
       try {
         const result = await executeSql(
-          selectedDevice, selectedPackage, selectedDb, batch.sql, databaseKeys[selectedDb], batch.params
+          selectedDevice, selectedPackage, selectedDb, batch.sql, databaseKeys[selectedDb], batch.params, batch.rowKeys.length
         );
         if (!result.success || result.rows_affected !== batch.rowKeys.length) {
           throw new Error(result.message || "Quantidade de linhas atualizadas não corresponde ao lote.");
