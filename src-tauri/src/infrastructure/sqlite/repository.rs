@@ -10,6 +10,38 @@ pub struct SqliteRepository {
 }
 
 impl SqliteRepository {
+    fn validate_db_name(db_name: &str) -> Result<(), String> {
+        if db_name.is_empty()
+            || db_name == "."
+            || db_name == ".."
+            || db_name.contains('/')
+            || db_name.contains('\\')
+            || db_name.contains('\0')
+            || db_name.contains('\n')
+            || db_name.contains('\r')
+        {
+            return Err("Invalid database filename".to_string());
+        }
+        Ok(())
+    }
+
+    fn ensure_package_stopped(&self, device_id: &str, package: &str) -> Result<(), String> {
+        // Writing a snapshot over a database held open by Android risks corrupting WAL state.
+        let quoted_package = crate::infrastructure::adb::adapter::shell_quote(package)?;
+        let command = format!(
+            "if ! command -v pidof >/dev/null 2>&1; then echo UNKNOWN; elif pidof -s {} >/dev/null 2>&1; then echo RUNNING; else echo STOPPED; fi",
+            quoted_package
+        );
+        let state = self.adb.shell(device_id, &command)?;
+        if state.trim() != "STOPPED" {
+            return Err(
+                "Database writes require the Android app to be stopped and pidof available. Close the app and retry."
+                    .to_string(),
+            );
+        }
+        Ok(())
+    }
+
     pub fn new() -> Self {
         Self {
             adb: AdbAdapter::new(),
@@ -22,6 +54,7 @@ impl SqliteRepository {
         package: &str,
         db_name: &str,
     ) -> Result<(TempDir, std::path::PathBuf), String> {
+        Self::validate_db_name(db_name)?;
         let temp_dir =
             tempfile::tempdir().map_err(|e| format!("Failed to create temp dir: {}", e))?;
 
@@ -307,11 +340,12 @@ impl SqliteRepository {
         sql: &str,
         db_key: Option<&str>,
     ) -> Result<SqlResult, String> {
-        let (_temp_dir, local_path) = self.pull_database(device_id, package_name, db_name)?;
-
-        let conn = self.open_connection(&local_path, db_key)?;
-
         let is_select = sql.trim().to_uppercase().starts_with("SELECT");
+        if !is_select {
+            self.ensure_package_stopped(device_id, package_name)?;
+        }
+        let (_temp_dir, local_path) = self.pull_database(device_id, package_name, db_name)?;
+        let conn = self.open_connection(&local_path, db_key)?;
 
         if is_select {
             let mut stmt = conn
@@ -360,11 +394,16 @@ impl SqliteRepository {
         let rows_affected = conn
             .execute(sql, [])
             .map_err(|e| format!("Failed to execute: {}", e))? as u64;
+        // Consolidate local WAL changes before copying the snapshot to Android.
+        conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+            .map_err(|e| format!("Failed to checkpoint SQLite before writing: {}", e))?;
         drop(conn);
 
         let local_db = std::fs::read(&local_path)
             .map_err(|e| format!("Failed to read modified database: {}", e))?;
         let remote_db = format!("databases/{}", db_name);
+        // Fail closed if the application reopened while the local copy was being edited.
+        self.ensure_package_stopped(device_id, package_name)?;
         self.adb
             .push_app_file_snapshot(device_id, package_name, &remote_db, &local_db)?;
 
