@@ -14,11 +14,19 @@ fn quote_identifier(name: &str) -> Result<String, String> {
 
 fn has_numeric_affinity(declared_type: &str) -> bool {
     let kind = declared_type.to_ascii_uppercase();
-    if kind.contains("CHAR") || kind.contains("CLOB") || kind.contains("TEXT") || kind.contains("BLOB") {
+    if kind.contains("CHAR")
+        || kind.contains("CLOB")
+        || kind.contains("TEXT")
+        || kind.contains("BLOB")
+    {
         return false;
     }
-    kind.contains("INT") || kind.contains("REAL") || kind.contains("FLOA")
-        || kind.contains("DOUB") || kind.contains("NUM") || kind.contains("DEC")
+    kind.contains("INT")
+        || kind.contains("REAL")
+        || kind.contains("FLOA")
+        || kind.contains("DOUB")
+        || kind.contains("NUM")
+        || kind.contains("DEC")
 }
 
 fn to_bound_sql_value(value: &serde_json::Value) -> Result<rusqlite::types::Value, String> {
@@ -35,7 +43,9 @@ fn to_bound_sql_value(value: &serde_json::Value) -> Result<rusqlite::types::Valu
                 return Err("Integer parameter outside SQLite i64 range".to_string());
             }
             let float = number.as_f64().ok_or("Invalid SQL number")?;
-            if !float.is_finite() { return Err("SQL parameter must be finite".to_string()); }
+            if !float.is_finite() {
+                return Err("SQL parameter must be finite".to_string());
+            }
             Ok(Value::Real(float))
         }
         _ => Err("SQL parameters must be scalar values".to_string()),
@@ -154,15 +164,16 @@ impl SqliteRepository {
 
                 #[cfg(feature = "sqlcipher")]
                 {
-                let escaped_key = trimmed_key.replace('\'', "''");
-                conn.execute_batch(&format!("PRAGMA key = '{}';", escaped_key))
-                    .map_err(|e| format!("Failed to apply SQLCipher key: {}", e))?;
+                    let escaped_key = trimmed_key.replace('\'', "''");
+                    conn.execute_batch(&format!("PRAGMA key = '{}';", escaped_key))
+                        .map_err(|e| format!("Failed to apply SQLCipher key: {}", e))?;
                 }
             }
         }
 
-        match conn.query_row("SELECT count(*) FROM sqlite_master", [], |row| row.get::<_, i64>(0))
-        {
+        match conn.query_row("SELECT count(*) FROM sqlite_master", [], |row| {
+            row.get::<_, i64>(0)
+        }) {
             Ok(_) => Ok(conn),
             Err(error) => {
                 let error_text = error.to_string().to_lowercase();
@@ -172,8 +183,10 @@ impl SqliteRepository {
                     } else {
                         #[cfg(feature = "sqlcipher")]
                         {
-                            Err("This database appears to be encrypted. Provide a SQLCipher key."
-                                .to_string())
+                            Err(
+                                "This database appears to be encrypted. Provide a SQLCipher key."
+                                    .to_string(),
+                            )
                         }
                         #[cfg(not(feature = "sqlcipher"))]
                         {
@@ -313,7 +326,9 @@ impl SqliteRepository {
             .prepare(&format!("PRAGMA table_info({})", table_ident))
             .map_err(|e| format!("Failed to inspect table schema: {}", e))?;
         let columns = schema
-            .query_map([], |row| Ok((row.get::<_, String>(1)?, row.get::<_, String>(2)?)))
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(1)?, row.get::<_, String>(2)?))
+            })
             .map_err(|e| e.to_string())?;
         for column in columns {
             let (name, declared_type) = column.map_err(|e| e.to_string())?;
@@ -326,13 +341,19 @@ impl SqliteRepository {
         let mut filter_values: Vec<rusqlite::types::Value> = Vec::new();
         if let Some(filters) = filters {
             let mut clauses = Vec::new();
-            for filter in filters.into_iter().filter(|filter| !filter.value.is_empty()) {
+            for filter in filters
+                .into_iter()
+                .filter(|filter| !filter.value.is_empty())
+            {
                 if !column_types.contains_key(&filter.column) {
                     return Err(format!("Unknown filter column: {}", filter.column));
                 }
                 let column = quote_identifier(&filter.column)?;
                 let value = filter.value.trim();
-                if column_types.get(&filter.column).is_some_and(|kind| has_numeric_affinity(kind)) {
+                if column_types
+                    .get(&filter.column)
+                    .is_some_and(|kind| has_numeric_affinity(kind))
+                {
                     if let Ok(number) = value.parse::<i64>() {
                         clauses.push(format!("{} = ?", column));
                         filter_values.push(rusqlite::types::Value::Integer(number));
@@ -365,7 +386,11 @@ impl SqliteRepository {
                 "DESC" => "DESC",
                 _ => return Err("Invalid sort direction".to_string()),
             };
-            sql.push_str(&format!(" ORDER BY {} {}", quote_identifier(&sort.column)?, direction));
+            sql.push_str(&format!(
+                " ORDER BY {} {}",
+                quote_identifier(&sort.column)?,
+                direction
+            ));
         }
 
         let safe_page_size = page_size.clamp(1, 1000);
@@ -373,7 +398,11 @@ impl SqliteRepository {
         sql.push_str(&format!(" LIMIT {} OFFSET {}", safe_page_size, offset));
 
         let total_rows: u64 = conn
-            .query_row(&count_sql, rusqlite::params_from_iter(filter_values.iter()), |row| row.get(0))
+            .query_row(
+                &count_sql,
+                rusqlite::params_from_iter(filter_values.iter()),
+                |row| row.get(0),
+            )
             .map_err(|e| format!("Failed to count filtered rows: {}", e))?;
 
         let mut stmt = conn
@@ -422,7 +451,8 @@ impl SqliteRepository {
         db_key: Option<&str>,
         params: &[serde_json::Value],
     ) -> Result<SqlResult, String> {
-        let bound: Vec<rusqlite::types::Value> = params.iter()
+        let bound: Vec<rusqlite::types::Value> = params
+            .iter()
             .map(to_bound_sql_value)
             .collect::<Result<_, _>>()?;
         let (_temp_dir, local_path) = self.pull_database(device_id, package_name, db_name)?;
@@ -440,7 +470,8 @@ impl SqliteRepository {
         // Unlike a SELECT prefix, the prepared statement correctly classifies
         // WITH queries and read-only PRAGMAs without accidentally entering
         // the multi-file Android write protocol.
-        let is_select = conn.prepare(sql)
+        let is_select = conn
+            .prepare(sql)
             .map_err(|e| format!("Invalid SQL statement: {}", e))?
             .readonly();
         if !is_select {
@@ -511,7 +542,10 @@ impl SqliteRepository {
             .query_row("PRAGMA quick_check(1)", [], |row| row.get(0))
             .map_err(|e| format!("Failed to verify local SQLite integrity: {}", e))?;
         if integrity != "ok" {
-            return Err(format!("SQLite quick_check failed: {}; refusing to write", integrity));
+            return Err(format!(
+                "SQLite quick_check failed: {}; refusing to write",
+                integrity
+            ));
         }
         drop(conn);
 
@@ -525,19 +559,30 @@ impl SqliteRepository {
             &format!("am force-stop {}", Self::quote_shell_arg(package_name)?),
         )?;
         self.ensure_package_stopped(device_id, package_name)?;
-        let current_db = self.adb.pull_app_file_snapshot(device_id, package_name, &remote_db)?;
+        let current_db = self
+            .adb
+            .pull_app_file_snapshot(device_id, package_name, &remote_db)?;
         let current_wal = self.adb.pull_app_file_snapshot_optional(
-            device_id, package_name, &format!("{}-wal", remote_db),
+            device_id,
+            package_name,
+            &format!("{}-wal", remote_db),
         )?;
         if current_db != original_db || current_wal != original_wal {
-            return Err("Android database changed since editing began. No changes sent; reload and retry.".to_string());
+            return Err(
+                "Android database changed since editing began. No changes sent; reload and retry."
+                    .to_string(),
+            );
         }
 
         // The adapter performs verified app-private staging and retains remote
         // backups during the replacement, with a rollback attempt on failure.
         self.adb.replace_database_snapshot_with_recovery(
-            device_id, package_name, &remote_db, &local_db,
-            &original_db, original_wal.as_deref(),
+            device_id,
+            package_name,
+            &remote_db,
+            &local_db,
+            &original_db,
+            original_wal.as_deref(),
         )?;
 
         Ok(SqlResult {
@@ -563,10 +608,22 @@ mod security_tests {
     #[test]
     fn bound_values_preserve_null_empty_text_and_integer_types() {
         use rusqlite::types::Value;
-        assert_eq!(to_bound_sql_value(&serde_json::Value::Null).unwrap(), Value::Null);
-        assert_eq!(to_bound_sql_value(&serde_json::json!("")).unwrap(), Value::Text("".to_owned()));
-        assert_eq!(to_bound_sql_value(&serde_json::json!("NULL")).unwrap(), Value::Text("NULL".to_owned()));
-        assert_eq!(to_bound_sql_value(&serde_json::json!(123)).unwrap(), Value::Integer(123));
+        assert_eq!(
+            to_bound_sql_value(&serde_json::Value::Null).unwrap(),
+            Value::Null
+        );
+        assert_eq!(
+            to_bound_sql_value(&serde_json::json!("")).unwrap(),
+            Value::Text("".to_owned())
+        );
+        assert_eq!(
+            to_bound_sql_value(&serde_json::json!("NULL")).unwrap(),
+            Value::Text("NULL".to_owned())
+        );
+        assert_eq!(
+            to_bound_sql_value(&serde_json::json!(123)).unwrap(),
+            Value::Integer(123)
+        );
         assert!(to_bound_sql_value(&serde_json::json!({"not":"scalar"})).is_err());
     }
 

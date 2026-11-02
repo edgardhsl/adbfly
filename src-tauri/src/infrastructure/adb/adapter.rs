@@ -20,12 +20,13 @@ pub(crate) fn shell_quote(input: &str) -> Result<String, String> {
     Ok(format!("'{}'", input.replace('\'', "'\"'\"'")))
 }
 
-
 fn validate_write_destination(path: &str) -> Result<(), String> {
-    let filename = path.strip_prefix("databases/")
-        .ok_or_else(|| "Only files inside the Android databases directory can be written".to_string())?;
+    let filename = path.strip_prefix("databases/").ok_or_else(|| {
+        "Only files inside the Android databases directory can be written".to_string()
+    })?;
     if filename.is_empty()
-        || filename == "." || filename == ".."
+        || filename == "."
+        || filename == ".."
         || filename.contains("..")
         || filename.contains('/')
         || filename.contains('\\')
@@ -155,7 +156,8 @@ impl AdbAdapter {
     }
 
     pub fn list_packages(&self, device_id: &str) -> Result<Vec<Package>, String> {
-        let third_party_output = self.run(&["-s", device_id, "shell", "pm", "list", "packages", "-3"])?;
+        let third_party_output =
+            self.run(&["-s", device_id, "shell", "pm", "list", "packages", "-3"])?;
 
         let mut packages: Vec<Package> = third_party_output
             .lines()
@@ -168,7 +170,8 @@ impl AdbAdapter {
             .collect();
 
         if packages.is_empty() {
-            let all_packages_output = self.run(&["-s", device_id, "shell", "pm", "list", "packages"])?;
+            let all_packages_output =
+                self.run(&["-s", device_id, "shell", "pm", "list", "packages"])?;
             packages = all_packages_output
                 .lines()
                 .filter_map(|line| {
@@ -342,14 +345,25 @@ impl AdbAdapter {
         validate_write_destination(relative_path)?;
         let shell_script = format!("umask 077; cat > {}", shell_quote(relative_path)?);
         let mut cmd = Command::new("adb");
-        cmd.args(["-s", device_id, "exec-in", "run-as", package, "sh", "-c", &shell_script])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped());
+        cmd.args([
+            "-s",
+            device_id,
+            "exec-in",
+            "run-as",
+            package,
+            "sh",
+            "-c",
+            &shell_script,
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
         #[cfg(target_os = "windows")]
         cmd.creation_flags(CREATE_NO_WINDOW);
 
-        let mut child = cmd.spawn().map_err(|e| format!("Failed to stream database to Android: {}", e))?;
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| format!("Failed to stream database to Android: {}", e))?;
         let mut stdin = child.stdin.take().ok_or("ADB stdin unavailable")?;
         let mut stderr = child.stderr.take().ok_or("ADB stderr unavailable")?;
         let result: Result<(), String> = thread::scope(|scope| {
@@ -378,8 +392,12 @@ impl AdbAdapter {
                     }
                 }
             };
-            let write_result = writer.join().map_err(|_| "ADB writer panicked".to_string())?;
-            let errors = error_reader.join().map_err(|_| "ADB stderr reader panicked".to_string())?;
+            let write_result = writer
+                .join()
+                .map_err(|_| "ADB writer panicked".to_string())?;
+            let errors = error_reader
+                .join()
+                .map_err(|_| "ADB stderr reader panicked".to_string())?;
             let status = status?;
             write_result.map_err(|e| format!("ADB upload failed: {}", e))?;
             if !status.success() {
@@ -418,13 +436,25 @@ impl AdbAdapter {
                 shell_quote(&staged)?,
                 shell_quote(relative_path)?
             );
-            let run_as = format!("run-as {} sh -c {}", shell_quote(package)?, shell_quote(&commit)?);
+            let run_as = format!(
+                "run-as {} sh -c {}",
+                shell_quote(package)?,
+                shell_quote(&commit)?
+            );
             self.shell_with_timeout(device_id, &run_as, Duration::from_secs(DB_IO_TIMEOUT_SECS))?;
             Ok(())
         })();
 
-        let cleanup = format!("run-as {} rm -f -- {}", shell_quote(package)?, shell_quote(&staged)?);
-        let cleanup_result = self.shell_with_timeout(device_id, &cleanup, Duration::from_secs(DEFAULT_TIMEOUT_SECS));
+        let cleanup = format!(
+            "run-as {} rm -f -- {}",
+            shell_quote(package)?,
+            shell_quote(&staged)?
+        );
+        let cleanup_result = self.shell_with_timeout(
+            device_id,
+            &cleanup,
+            Duration::from_secs(DEFAULT_TIMEOUT_SECS),
+        );
         match (transfer, cleanup_result) {
             (Err(error), _) => Err(error),
             (Ok(()), Err(error)) => Err(format!("Database staging cleanup failed: {}", error)),
@@ -451,12 +481,18 @@ impl AdbAdapter {
         let backup_wal = format!("{}-wal.adbfly-backup", relative_db);
         let backup_shm = format!("{}-shm.adbfly-backup", relative_db);
         let marker = format!("{}.adbfly-pending", relative_db);
-        let nonce = SystemTime::now().duration_since(UNIX_EPOCH)
-            .map_err(|e| e.to_string())?.as_nanos();
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|e| e.to_string())?
+            .as_nanos();
         let staged = format!("{}.adbfly-stage-{}", relative_db, nonce);
 
         let run_private = |script: &str| -> Result<String, String> {
-            let cmd = format!("run-as {} sh -c {}", shell_quote(package)?, shell_quote(script)?);
+            let cmd = format!(
+                "run-as {} sh -c {}",
+                shell_quote(package)?,
+                shell_quote(script)?
+            );
             self.shell_with_timeout(device_id, &cmd, Duration::from_secs(DB_IO_TIMEOUT_SECS))
         };
         let q = |path: &str| shell_quote(path);
@@ -465,7 +501,10 @@ impl AdbAdapter {
         // untouched until explicit recovery, not automatically discarded.
         let preflight = format!(
             "test ! -e {0} && test ! -e {1} && test ! -e {2} && test ! -e {3}",
-            q(&marker)?, q(&backup_db)?, q(&backup_wal)?, q(&backup_shm)?
+            q(&marker)?,
+            q(&backup_db)?,
+            q(&backup_wal)?,
+            q(&backup_shm)?
         );
         run_private(&preflight).map_err(|_| {
             "An earlier ADB Fly database write may be incomplete; recovery backups exist in the app's databases directory. Refusing to overwrite them.".to_string()
@@ -480,12 +519,19 @@ impl AdbAdapter {
         // The upload may take seconds. Stop the app again and compare the
         // source immediately before the remote transaction begins.
         let stop_cmd = format!("am force-stop {}", shell_quote(package)?);
-        self.shell_with_timeout(device_id, &stop_cmd, Duration::from_secs(DEFAULT_TIMEOUT_SECS))?;
+        self.shell_with_timeout(
+            device_id,
+            &stop_cmd,
+            Duration::from_secs(DEFAULT_TIMEOUT_SECS),
+        )?;
         let live_db = self.pull_app_file_snapshot(device_id, package, relative_db)?;
         let live_wal = self.pull_app_file_snapshot_optional(device_id, package, &wal)?;
         if live_db != expected_db || live_wal.as_deref() != expected_wal {
             let _ = run_private(&format!("rm -f -- {}", q(&staged)?));
-            return Err("Android SQLite changed while the new database was being staged. Write aborted.".to_string());
+            return Err(
+                "Android SQLite changed while the new database was being staged. Write aborted."
+                    .to_string(),
+            );
         }
 
         // Every backup is an atomic rename, never a partially-written copy.
@@ -497,21 +543,29 @@ impl AdbAdapter {
              if [ -e {wal} ]; then mv -- {wal} {bwal}; fi; \
              if [ -e {shm} ]; then mv -- {shm} {bshm}; fi; \
              mv -- {stage} {db}",
-            marker=q(&marker)?, db=q(relative_db)?, bak=q(&backup_db)?,
-            wal=q(&wal)?, bwal=q(&backup_wal)?,
-            shm=q(&shm)?, bshm=q(&backup_shm)?, stage=q(&staged)?
+            marker = q(&marker)?,
+            db = q(relative_db)?,
+            bak = q(&backup_db)?,
+            wal = q(&wal)?,
+            bwal = q(&backup_wal)?,
+            shm = q(&shm)?,
+            bshm = q(&backup_shm)?,
+            stage = q(&staged)?
         );
         let committed = run_private(&commit);
         let verification = match committed {
-            Ok(_) => (|| -> Result<(), String> {
-                let remote_db = self.pull_app_file_snapshot(device_id, package, relative_db)?;
-                let remote_wal = self.pull_app_file_snapshot_optional(device_id, package, &wal)?;
-                if remote_db != data || remote_wal.is_some() {
-                    Err("Remote SQLite snapshot changed during replacement, or a new WAL appeared".to_string())
-                } else {
-                    Ok(())
-                }
-            })(),
+            Ok(_) => {
+                (|| -> Result<(), String> {
+                    let remote_db = self.pull_app_file_snapshot(device_id, package, relative_db)?;
+                    let remote_wal =
+                        self.pull_app_file_snapshot_optional(device_id, package, &wal)?;
+                    if remote_db != data || remote_wal.is_some() {
+                        Err("Remote SQLite snapshot changed during replacement, or a new WAL appeared".to_string())
+                    } else {
+                        Ok(())
+                    }
+                })()
+            }
             Err(error) => Err(error),
         };
 
@@ -523,9 +577,12 @@ impl AdbAdapter {
                 "set -e; if [ -e {bak} ]; then mv -f -- {bak} {db}; fi; \
                  if [ -e {bwal} ]; then mv -f -- {bwal} {wal}; fi; \
                  if [ -e {bshm} ]; then mv -f -- {bshm} {shm}; fi",
-                bak=q(&backup_db)?, db=q(relative_db)?,
-                bwal=q(&backup_wal)?, wal=q(&wal)?,
-                bshm=q(&backup_shm)?, shm=q(&shm)?
+                bak = q(&backup_db)?,
+                db = q(relative_db)?,
+                bwal = q(&backup_wal)?,
+                wal = q(&wal)?,
+                bshm = q(&backup_shm)?,
+                shm = q(&shm)?
             );
             if let Err(rollback_error) = run_private(&rollback) {
                 return Err(format!(
@@ -558,8 +615,11 @@ impl AdbAdapter {
 
         let cleanup = format!(
             "rm -f -- {} {} {} {} {}",
-            q(&backup_db)?, q(&backup_wal)?, q(&backup_shm)?,
-            q(&marker)?, q(&staged)?
+            q(&backup_db)?,
+            q(&backup_wal)?,
+            q(&backup_shm)?,
+            q(&marker)?,
+            q(&staged)?
         );
         run_private(&cleanup).map_err(|e| format!(
             "New database verified, but recovery backups could not be cleaned: {}. Manual inspection required.", e
@@ -621,14 +681,27 @@ fn normalize_remote_path(path: Option<&str>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{escape_single_quotes, normalize_logcat_lines, normalize_remote_path, validate_write_destination, shell_quote};
+    use super::{
+        escape_single_quotes, normalize_logcat_lines, normalize_remote_path, shell_quote,
+        validate_write_destination,
+    };
 
     #[test]
     fn rejects_snapshot_paths_outside_database_directory() {
-        for path in ["../db", "shared_prefs/a.xml", "databases/", "databases/../secrets", "databases/a/b"] {
+        for path in [
+            "../db",
+            "shared_prefs/a.xml",
+            "databases/",
+            "databases/../secrets",
+            "databases/a/b",
+        ] {
             assert!(validate_write_destination(path).is_err(), "accepted {path}");
         }
-        for path in ["databases/app.db", "databases/app.db-wal", "databases/app.db-shm"] {
+        for path in [
+            "databases/app.db",
+            "databases/app.db-wal",
+            "databases/app.db-shm",
+        ] {
             assert!(validate_write_destination(path).is_ok(), "rejected {path}");
         }
     }
