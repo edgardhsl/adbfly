@@ -488,43 +488,72 @@ impl AdbAdapter {
             return Err("Android SQLite changed while the new database was being staged. Write aborted.".to_string());
         }
 
+        // Every backup is an atomic rename, never a partially-written copy.
+        // If any step fails, the original bytes remain at the original path
+        // or as a complete backup in the same filesystem.
         let commit = format!(
-            "set -e; umask 077; : > {marker}; cp -- {db} {bak}; \
-            if [ -f {wal} ]; then mv -f -- {wal} {bwal}; fi; \
-            if [ -f {shm} ]; then mv -f -- {shm} {bshm}; fi; \
-            mv -f -- {stage} {db}",
+            "set -e; umask 077; : > {marker}; \
+             mv -- {db} {bak}; \
+             if [ -e {wal} ]; then mv -- {wal} {bwal}; fi; \
+             if [ -e {shm} ]; then mv -- {shm} {bshm}; fi; \
+             mv -- {stage} {db}",
             marker=q(&marker)?, db=q(relative_db)?, bak=q(&backup_db)?,
             wal=q(&wal)?, bwal=q(&backup_wal)?,
             shm=q(&shm)?, bshm=q(&backup_shm)?, stage=q(&staged)?
         );
         let committed = run_private(&commit);
         let verification = match committed {
-            Ok(_) => self.pull_app_file_snapshot(device_id, package, relative_db)
-                .and_then(|received| if received == data { Ok(()) }
-                    else { Err("Remote database differs from the verified local snapshot".to_string()) }),
+            Ok(_) => {
+                let remote_db = self.pull_app_file_snapshot(device_id, package, relative_db)?;
+                let remote_wal = self.pull_app_file_snapshot_optional(device_id, package, &wal)?;
+                if remote_db != data || remote_wal.is_some() {
+                    Err("Remote SQLite snapshot changed during replacement, or a new WAL appeared".to_string())
+                } else {
+                    Ok(())
+                }
+            }
             Err(error) => Err(error),
         };
 
         if let Err(error) = verification {
-            // Best-effort rollback. If the device disconnects, the marker and
-            // backups remain for explicit operator recovery on the next attempt.
+            // Do not erase backups or the recovery marker after a failed
+            // rollback. The marker is removed only after original data
+            // and WAL are read back and compared to the expected snapshot.
             let rollback = format!(
-                "set -e; if [ -f {bak} ]; then mv -f -- {bak} {db}; fi; \
-                if [ -f {bwal} ]; then mv -f -- {bwal} {wal}; fi; \
-                if [ -f {bshm} ]; then mv -f -- {bshm} {shm}; fi; \
-                rm -f -- {stage} {marker}",
+                "set -e; if [ -e {bak} ]; then mv -f -- {bak} {db}; fi; \
+                 if [ -e {bwal} ]; then mv -f -- {bwal} {wal}; fi; \
+                 if [ -e {bshm} ]; then mv -f -- {bshm} {shm}; fi",
                 bak=q(&backup_db)?, db=q(relative_db)?,
                 bwal=q(&backup_wal)?, wal=q(&wal)?,
-                bshm=q(&backup_shm)?, shm=q(&shm)?,
-                stage=q(&staged)?, marker=q(&marker)?
+                bshm=q(&backup_shm)?, shm=q(&shm)?
             );
             if let Err(rollback_error) = run_private(&rollback) {
                 return Err(format!(
-                    "Database replacement failed: {}. RECOVERY REQUIRED; original backup files were retained. Rollback error: {}",
+                    "SQLite replacement failed: {}. RECOVERY REQUIRED; do not restart the app. Rollback failed: {}",
                     error, rollback_error
                 ));
             }
-            return Err(format!("Database replacement failed and original files were restored: {}", error));
+            let restored = self.pull_app_file_snapshot(device_id, package, relative_db);
+            let restored_wal = self.pull_app_file_snapshot_optional(device_id, package, &wal);
+            match (restored, restored_wal) {
+                (Ok(db), Ok(wal_data))
+                    if db == expected_db && wal_data.as_deref() == expected_wal =>
+                {
+                    // Safe to remove the marker only after verifying the
+                    // restored main DB and WAL. A cleanup failure leaves the
+                    // marker in place and blocks any later writes.
+                    run_private(&format!("rm -f -- {} {}", q(&staged)?, q(&marker)?))
+                        .map_err(|e| format!("Original SQLite restored, but staging cleanup failed: {}. Inspect recovery marker.", e))?;
+                    return Err(format!(
+                        "SQLite replacement aborted: {}. Original files were restored and verified.",
+                        error
+                    ));
+                }
+                _ => return Err(format!(
+                    "SQLite replacement failed: {}. RECOVERY REQUIRED; rollback could not verify the original DB/WAL. The recovery marker was retained.",
+                    error
+                )),
+            }
         }
 
         let cleanup = format!(
