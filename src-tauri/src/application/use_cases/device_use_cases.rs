@@ -157,13 +157,10 @@ fn parse_meminfo_kb(meminfo: &str, key: &str) -> Option<u64> {
 }
 
 fn parse_storage_gb(df_output: &str) -> Option<(f64, f64)> {
-    let line = df_output
-        .lines()
-        .rev()
-        .find(|entry| {
-            let trimmed = entry.trim();
-            !trimmed.is_empty() && !trimmed.starts_with("Filesystem")
-        })?;
+    let line = df_output.lines().rev().find(|entry| {
+        let trimmed = entry.trim();
+        !trimmed.is_empty() && !trimmed.starts_with("Filesystem")
+    })?;
     let cols: Vec<&str> = line.split_whitespace().collect();
     if cols.len() < 3 {
         return None;

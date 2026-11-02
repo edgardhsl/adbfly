@@ -130,7 +130,8 @@ export async function executeSql(
   packageName: string,
   dbName: string,
   sql: string,
-  dbKey?: string
+  dbKey?: string,
+  params?: Array<string | number | boolean | null>
 ): Promise<SqlResult> {
   if (shouldUseMockAdb()) return executeMockSql();
   return invoke('execute_sql', {
@@ -139,6 +140,7 @@ export async function executeSql(
     dbName,
     sql,
     dbKey,
+    params,
   });
 }
 

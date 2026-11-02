@@ -26,7 +26,9 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Typecheck
-        run: npx tsc --noEmit
+        run: npm run typecheck
+      - name: ESLint
+        run: npm run lint
       - name: Frontend unit tests
         run: npm run test:unit
       - name: Static production build
@@ -45,5 +47,7 @@ jobs:
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
       - name: Rust unit tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+        run: npm run test:rust

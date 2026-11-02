@@ -177,11 +177,12 @@ pub async fn execute_sql(
     db_name: String,
     sql: String,
     db_key: Option<String>,
+    params: Option<Vec<serde_json::Value>>,
 ) -> Result<crate::domain::entities::SqlResult, String> {
     run_with_state(state, move |app_state| {
         app_state
             .database_use_cases
-            .execute_sql(&device_id, &package_name, &db_name, &sql, db_key.as_deref())
+            .execute_sql(&device_id, &package_name, &db_name, &sql, db_key.as_deref(), &params.unwrap_or_default())
     })
     .await
 }
