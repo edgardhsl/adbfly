@@ -10,6 +10,45 @@ pub struct SqliteRepository {
 }
 
 impl SqliteRepository {
+    fn validate_db_name(db_name: &str) -> Result<(), String> {
+        if db_name.is_empty()
+            || db_name == "."
+            || db_name == ".."
+            || db_name.contains('/')
+            || db_name.contains('\\')
+            || db_name.contains('\0')
+            || db_name.contains('\n')
+            || db_name.contains('\r')
+        {
+            return Err("Invalid database filename".to_string());
+        }
+        Ok(())
+    }
+
+    fn quote_shell_arg(value: &str) -> Result<String, String> {
+        if value.contains('\0') || value.contains('\n') || value.contains('\r') {
+            return Err("Invalid Android package name".to_string());
+        }
+        Ok(format!("'{}'", value.replace('\'', "'\"'\"'")))
+    }
+
+    fn ensure_package_stopped(&self, device_id: &str, package: &str) -> Result<(), String> {
+        // Writing a snapshot over a database held open by Android risks corrupting WAL state.
+        let quoted_package = Self::quote_shell_arg(package)?;
+        let command = format!(
+            "if ! command -v pidof >/dev/null 2>&1; then echo UNKNOWN; elif pidof -s {} >/dev/null 2>&1; then echo RUNNING; else echo STOPPED; fi",
+            quoted_package
+        );
+        let state = self.adb.shell(device_id, &command)?;
+        if state.trim() != "STOPPED" {
+            return Err(
+                "Database writes require the Android app to be stopped and pidof available. Close the app and retry."
+                    .to_string(),
+            );
+        }
+        Ok(())
+    }
+
     pub fn new() -> Self {
         Self {
             adb: AdbAdapter::new(),
@@ -22,6 +61,7 @@ impl SqliteRepository {
         package: &str,
         db_name: &str,
     ) -> Result<(TempDir, std::path::PathBuf), String> {
+        Self::validate_db_name(db_name)?;
         let temp_dir =
             tempfile::tempdir().map_err(|e| format!("Failed to create temp dir: {}", e))?;
 
@@ -307,11 +347,22 @@ impl SqliteRepository {
         sql: &str,
         db_key: Option<&str>,
     ) -> Result<SqlResult, String> {
-        let (_temp_dir, local_path) = self.pull_database(device_id, package_name, db_name)?;
-
-        let conn = self.open_connection(&local_path, db_key)?;
-
         let is_select = sql.trim().to_uppercase().starts_with("SELECT");
+        if !is_select {
+            self.ensure_package_stopped(device_id, package_name)?;
+        }
+        let (_temp_dir, local_path) = self.pull_database(device_id, package_name, db_name)?;
+        // Preserve the exact source version so another app write cannot be
+        // overwritten while the snapshot is being edited on the host.
+        let original_db = std::fs::read(&local_path)
+            .map_err(|e| format!("Failed to read original DB snapshot: {}", e))?;
+        let original_wal_path = local_path.with_file_name(format!("{}-wal", db_name));
+        let original_wal = if original_wal_path.exists() {
+            Some(std::fs::read(&original_wal_path).map_err(|e| e.to_string())?)
+        } else {
+            None
+        };
+        let conn = self.open_connection(&local_path, db_key)?;
 
         if is_select {
             let mut stmt = conn
@@ -360,38 +411,51 @@ impl SqliteRepository {
         let rows_affected = conn
             .execute(sql, [])
             .map_err(|e| format!("Failed to execute: {}", e))? as u64;
+        // The pragma returns (busy, log_frames, checkpointed_frames); execute_batch
+        // hides this status and can silently accept an incomplete checkpoint.
+        let (busy, log_frames, checkpointed_frames): (i64, i64, i64) = conn
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })
+            .map_err(|e| format!("Failed to checkpoint WAL: {}", e))?;
+        if busy != 0 || log_frames != checkpointed_frames {
+            return Err(format!(
+                "WAL checkpoint incomplete (busy={}, frames={}, checkpointed={}); refusing to write",
+                busy, log_frames, checkpointed_frames
+            ));
+        }
+        let integrity: String = conn
+            .query_row("PRAGMA quick_check(1)", [], |row| row.get(0))
+            .map_err(|e| format!("Failed to verify local SQLite integrity: {}", e))?;
+        if integrity != "ok" {
+            return Err(format!("SQLite quick_check failed: {}; refusing to write", integrity));
+        }
         drop(conn);
 
         let local_db = std::fs::read(&local_path)
             .map_err(|e| format!("Failed to read modified database: {}", e))?;
         let remote_db = format!("databases/{}", db_name);
-        self.adb
-            .push_app_file_snapshot(device_id, package_name, &remote_db, &local_db)?;
-
-        for suffix in ["-wal", "-shm"] {
-            let local_sidecar = local_path.with_file_name(format!("{}{}", db_name, suffix));
-            let remote_sidecar = format!("{}{}", remote_db, suffix);
-
-            if local_sidecar.exists() {
-                let sidecar_data = std::fs::read(&local_sidecar).map_err(|e| {
-                    format!(
-                        "Failed to read sqlite sidecar '{}': {}",
-                        local_sidecar.display(),
-                        e
-                    )
-                })?;
-                self.adb.push_app_file_snapshot(
-                    device_id,
-                    package_name,
-                    &remote_sidecar,
-                    &sidecar_data,
-                )?;
-            } else {
-                let _ = self
-                    .adb
-                    .delete_app_file_snapshot(device_id, package_name, &remote_sidecar);
-            }
+        // Force-stop marks the package stopped, preventing normal automatic
+        // restarts. The user should be warned in UI before initiating a write.
+        self.adb.shell(
+            device_id,
+            &format!("am force-stop {}", Self::quote_shell_arg(package_name)?),
+        )?;
+        self.ensure_package_stopped(device_id, package_name)?;
+        let current_db = self.adb.pull_app_file_snapshot(device_id, package_name, &remote_db)?;
+        let current_wal = self.adb.pull_app_file_snapshot_optional(
+            device_id, package_name, &format!("{}-wal", remote_db),
+        )?;
+        if current_db != original_db || current_wal != original_wal {
+            return Err("Android database changed since editing began. No changes sent; reload and retry.".to_string());
         }
+
+        // The adapter performs verified app-private staging and retains remote
+        // backups during the replacement, with a rollback attempt on failure.
+        self.adb.replace_database_snapshot_with_recovery(
+            device_id, package_name, &remote_db, &local_db,
+            &original_db, original_wal.as_deref(),
+        )?;
 
         Ok(SqlResult {
             success: true,

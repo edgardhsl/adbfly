@@ -519,6 +519,12 @@ function AppContent() {
     setEditingCell(null);
   };
 
+  const confirmSqliteWrite = () =>
+    window.confirm(
+      "O ADB Fly vai encerrar temporariamente o aplicativo Android antes de modificar seu banco de dados. " +
+      "Alterações não salvas no aplicativo podem ser perdidas. Confirme apenas se você possui backup e autorização para modificar os dados. Continuar?"
+    );
+
   const handleCommitPendingChanges = async () => {
     if (!selectedDevice || !selectedPackage || !selectedDb || !selectedTable || !pkColumn) return;
 
@@ -529,6 +535,7 @@ function AppContent() {
       });
       return;
     }
+    if (!confirmSqliteWrite()) return;
 
     setSavingPendingRows(true);
 
@@ -576,6 +583,7 @@ function AppContent() {
 
   const handleAddRow = async () => {
     if (!selectedDevice || !selectedPackage || !selectedDb || !selectedTable) return;
+    if (!confirmSqliteWrite()) return;
     const cols = tableSchema?.columns.filter(c => !c.primary_key || c.col_type.toUpperCase() !== "INTEGER") || [];
     if (cols.length === 0) {
       toast.warning("Nao ha colunas editaveis", {
@@ -610,6 +618,7 @@ function AppContent() {
       });
       return;
     }
+    if (!confirmSqliteWrite()) return;
     const rowData = tableData.rows[rowIndex];
     const pkValue = rowData[pk];
     const sql = `DELETE FROM "${selectedTable}" WHERE "${pk}" = ${typeof pkValue === 'number' ? pkValue : `'${pkValue}'`}`;
