@@ -14,6 +14,14 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 const DEFAULT_TIMEOUT_SECS: u64 = 8;
 const DB_IO_TIMEOUT_SECS: u64 = 90;
 
+fn shell_quote(input: &str) -> Result<String, String> {
+    if input.contains('\0') || input.contains('\n') || input.contains('\r') {
+        return Err("Invalid character in Android shell argument".to_string());
+    }
+    Ok(format!("'{}'", input.replace('\'', "'\"'\"'")))
+}
+
+
 pub struct AdbAdapter;
 
 impl AdbAdapter {
@@ -184,7 +192,7 @@ impl AdbAdapter {
         let limit_value = bounded_limit.to_string();
 
         if let Some(package) = package_name {
-            let pid_cmd = format!("pidof -s {}", package);
+            let pid_cmd = format!("pidof -s {}", shell_quote(package)?);
             let pid = self
                 .shell_with_timeout(device_id, &pid_cmd, Duration::from_secs(3))
                 .unwrap_or_default()
@@ -230,10 +238,10 @@ impl AdbAdapter {
         path: Option<&str>,
     ) -> Result<Vec<DeviceFileEntry>, String> {
         let target = normalize_remote_path(path);
-        let escaped = escape_single_quotes(&target);
+        let quoted = shell_quote(&target)?;
         let command = format!(
-            "sh -c 'target='\"'\"'{}'\"'\"'; if [ ! -d \"$target\" ]; then exit 2; fi; ls -a -1 -p \"$target\"'",
-            escaped
+            "if [ ! -d {0} ]; then exit 2; fi; ls -a -1 -p -- {0}",
+            quoted
         );
         let output = self.shell_with_timeout(device_id, &command, Duration::from_secs(6))?;
 
@@ -335,9 +343,16 @@ impl AdbAdapter {
             Duration::from_secs(DB_IO_TIMEOUT_SECS),
         )?;
 
+        let inner_command = format!(
+            "cp -- {} {} && chmod 600 {}",
+            shell_quote(&remote_tmp)?,
+            shell_quote(relative_path)?,
+            shell_quote(relative_path)?
+        );
         let run_as_cmd = format!(
-            "run-as {} sh -c 'cp {} {} && chmod 600 {}'",
-            package, remote_tmp, relative_path, relative_path
+            "run-as {} sh -c {}",
+            shell_quote(package)?,
+            shell_quote(&inner_command)?
         );
         let result = self.shell_with_timeout(
             device_id,
@@ -345,7 +360,7 @@ impl AdbAdapter {
             Duration::from_secs(DB_IO_TIMEOUT_SECS),
         );
 
-        let cleanup_cmd = format!("rm -f {}", remote_tmp);
+        let cleanup_cmd = format!("rm -f -- {}", shell_quote(&remote_tmp)?);
         let _ = self.shell_with_timeout(
             device_id,
             &cleanup_cmd,
@@ -361,7 +376,11 @@ impl AdbAdapter {
         package: &str,
         relative_path: &str,
     ) -> Result<(), String> {
-        let run_as_cmd = format!("run-as {} rm -f {}", package, relative_path);
+        let run_as_cmd = format!(
+            "run-as {} rm -f -- {}",
+            shell_quote(package)?,
+            shell_quote(relative_path)?
+        );
         self.shell_with_timeout(
             device_id,
             &run_as_cmd,
