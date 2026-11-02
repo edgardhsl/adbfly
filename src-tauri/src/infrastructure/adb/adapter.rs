@@ -459,7 +459,25 @@ fn normalize_remote_path(path: Option<&str>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{escape_single_quotes, normalize_logcat_lines, normalize_remote_path};
+    use super::{escape_single_quotes, normalize_logcat_lines, normalize_remote_path, validate_write_destination, shell_quote};
+
+    #[test]
+    fn rejects_snapshot_paths_outside_database_directory() {
+        for path in ["../db", "shared_prefs/a.xml", "databases/", "databases/../secrets", "databases/a/b"] {
+            assert!(validate_write_destination(path).is_err(), "accepted {path}");
+        }
+        for path in ["databases/app.db", "databases/app.db-wal", "databases/app.db-shm"] {
+            assert!(validate_write_destination(path).is_ok(), "rejected {path}");
+        }
+    }
+
+    #[test]
+    fn remote_shell_quote_escapes_unsafe_bytes() {
+        assert_eq!(shell_quote("a'b").unwrap(), "'a'\"'\"'b'");
+        for value in ["a\0b", "a\nb", "a\rb"] {
+            assert!(shell_quote(value).is_err());
+        }
+    }
 
     #[test]
     fn normalize_logcat_lines_trims_and_removes_empty_lines() {
