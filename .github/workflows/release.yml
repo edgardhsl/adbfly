@@ -9,8 +9,10 @@ on:
 
 jobs:
   release:
+    if: github.ref == 'refs/heads/main'
     permissions:
       contents: write
+      checks: read
     strategy:
       fail-fast: false
       matrix:
@@ -41,6 +43,12 @@ jobs:
         with:
           node-version: 22
           cache: npm
+
+      - name: Enforce release commit provenance and verified CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: bash scripts/verify-release-gate.sh
 
       - name: install Rust stable
         uses: dtolnay/rust-toolchain@stable
