@@ -3,7 +3,7 @@
 <div align="center">
 
 [![Versão](https://img.shields.io/badge/version-0.1.0-blue)](https://github.com/edgardhsl/adbfly)
-[![Licença](https://img.shields.io/badge/license-MIT-green)](https://github.com/edgardhsl/adbfly/blob/main/LICENSE)
+[![Licença](https://img.shields.io/badge/license-GPL--3.0-green)](https://github.com/edgardhsl/adbfly/blob/main/LICENSE)
 
 <img src="./public/images/logo.webp" alt="ADB Fly" width="160" />
 
@@ -123,7 +123,7 @@ Contribuições são bem-vindas! Leia [CONTRIBUTING.md](CONTRIBUTING.md) antes d
 
 ## Licença
 
-Licença MIT - veja o arquivo [LICENSE](LICENSE).
+Licenciado sob a GNU General Public License v3.0 (GPL-3.0). Consulte o arquivo [LICENSE](LICENSE).
 
 ---
 
