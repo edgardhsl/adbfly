@@ -3,7 +3,7 @@
 <div align="center">
 
 [![Versión](https://img.shields.io/badge/version-0.1.0-blue)](https://github.com/edgardhsl/adbfly)
-[![Licencia](https://img.shields.io/badge/license-MIT-green)](https://github.com/edgardhsl/adbfly/blob/main/LICENSE)
+[![Licencia](https://img.shields.io/badge/license-GPL--3.0-green)](https://github.com/edgardhsl/adbfly/blob/main/LICENSE)
 
 <img src="./public/images/logo.webp" alt="ADB Fly" width="160" />
 
