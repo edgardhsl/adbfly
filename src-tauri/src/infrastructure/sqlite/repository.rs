@@ -116,7 +116,7 @@ impl SqliteRepository {
         device_id: &str,
         package_name: &str,
     ) -> Result<Vec<DatabaseInfo>, String> {
-        let run_as_cmd = format!("run-as {} ls -la databases/", package_name);
+        let run_as_cmd = format!("run-as {} ls -la databases/", crate::infrastructure::adb::adapter::shell_quote(package_name)?);
         let output = self.adb.shell(device_id, &run_as_cmd);
 
         let mut databases = Vec::new();
