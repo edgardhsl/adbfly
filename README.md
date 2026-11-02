@@ -3,7 +3,7 @@
 <div align="center">
 
 [![Version](https://img.shields.io/badge/version-0.1.0-blue)](https://github.com/edgardhsl/adbfly)
-[![License](https://img.shields.io/badge/license-MIT-green)](https://github.com/edgardhsl/adbfly/blob/main/LICENSE)
+[![License](https://img.shields.io/badge/license-GPL--3.0-green)](https://github.com/edgardhsl/adbfly/blob/main/LICENSE)
 
 <p align="center">
   <img src="./public/images/logo.webp" alt="ADB Fly - Light and Dark Theme" width="160" />
@@ -160,7 +160,7 @@ Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) before
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) file.
+Licensed under the GNU General Public License v3.0 (GPL-3.0). See [LICENSE](LICENSE).
 
 ---
 
