@@ -21,6 +21,27 @@ fn has_numeric_affinity(declared_type: &str) -> bool {
         || kind.contains("DOUB") || kind.contains("NUM") || kind.contains("DEC")
 }
 
+fn to_bound_sql_value(value: &serde_json::Value) -> Result<rusqlite::types::Value, String> {
+    use rusqlite::types::Value;
+    match value {
+        serde_json::Value::Null => Ok(Value::Null),
+        serde_json::Value::Bool(flag) => Ok(Value::Integer(i64::from(*flag))),
+        serde_json::Value::String(text) => Ok(Value::Text(text.clone())),
+        serde_json::Value::Number(number) => {
+            if let Some(integer) = number.as_i64() {
+                return Ok(Value::Integer(integer));
+            }
+            if number.as_u64().is_some() {
+                return Err("Integer parameter outside SQLite i64 range".to_string());
+            }
+            let float = number.as_f64().ok_or("Invalid SQL number")?;
+            if !float.is_finite() { return Err("SQL parameter must be finite".to_string()); }
+            Ok(Value::Real(float))
+        }
+        _ => Err("SQL parameters must be scalar values".to_string()),
+    }
+}
+
 pub struct SqliteRepository {
     adb: AdbAdapter,
 }
@@ -359,7 +380,11 @@ impl SqliteRepository {
         db_name: &str,
         sql: &str,
         db_key: Option<&str>,
+        params: &[serde_json::Value],
     ) -> Result<SqlResult, String> {
+        let bound: Vec<rusqlite::types::Value> = params.iter()
+            .map(to_bound_sql_value)
+            .collect::<Result<_, _>>()?;
         let (_temp_dir, local_path) = self.pull_database(device_id, package_name, db_name)?;
 
         let conn = self.open_connection(&local_path, db_key)?;
@@ -375,7 +400,7 @@ impl SqliteRepository {
                 stmt.column_names().iter().map(|s| s.to_string()).collect();
 
             let rows: Vec<serde_json::Value> = stmt
-                .query_map([], |row| {
+                .query_map(rusqlite::params_from_iter(bound.iter()), |row| {
                     let mut map = serde_json::Map::new();
                     for (i, name) in column_names.iter().enumerate() {
                         let value: rusqlite::types::Value = row.get(i)?;
@@ -411,7 +436,7 @@ impl SqliteRepository {
         }
 
         let rows_affected = conn
-            .execute(sql, [])
+            .execute(sql, rusqlite::params_from_iter(bound.iter()))
             .map_err(|e| format!("Failed to execute: {}", e))? as u64;
         drop(conn);
 
@@ -458,12 +483,22 @@ impl SqliteRepository {
 
 #[cfg(test)]
 mod security_tests {
-    use super::{has_numeric_affinity, quote_identifier};
+    use super::{has_numeric_affinity, quote_identifier, to_bound_sql_value};
 
     #[test]
     fn identifiers_escape_double_quotes() {
         assert_eq!(quote_identifier("odd\"name").unwrap(), "\"odd\"\"name\"");
         assert!(quote_identifier("bad\0name").is_err());
+    }
+
+    #[test]
+    fn bound_values_preserve_null_empty_text_and_integer_types() {
+        use rusqlite::types::Value;
+        assert_eq!(to_bound_sql_value(&serde_json::Value::Null).unwrap(), Value::Null);
+        assert_eq!(to_bound_sql_value(&serde_json::json!("")).unwrap(), Value::Text("".to_owned()));
+        assert_eq!(to_bound_sql_value(&serde_json::json!("NULL")).unwrap(), Value::Text("NULL".to_owned()));
+        assert_eq!(to_bound_sql_value(&serde_json::json!(123)).unwrap(), Value::Integer(123));
+        assert!(to_bound_sql_value(&serde_json::json!({"not":"scalar"})).is_err());
     }
 
     #[test]
