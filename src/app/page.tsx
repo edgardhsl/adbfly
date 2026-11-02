@@ -440,10 +440,8 @@ function AppContent() {
 
   const pkColumn = tableSchema?.columns.find((c) => c.primary_key)?.name;
 
-  const escapeSqlText = (value: unknown) => String(value).replace(/'/g, "''");
+  const quoteSqlIdentifier = (identifier: string) => '"' + identifier.replace(/"/g, '""') + '"';
 
-  const toSqlValue = (value: string) =>
-    value === "NULL" || value === "" ? "NULL" : `'${escapeSqlText(value)}'`;
 
   const getRowKey = (row: Record<string, unknown>, rowIndex: number) => {
     if (!pkColumn) return `row:${rowIndex}`;
@@ -521,8 +519,8 @@ function AppContent() {
 
   const confirmSqliteWrite = () =>
     window.confirm(
-      "O ADB Fly vai encerrar temporariamente o aplicativo Android antes de modificar seu banco de dados. " +
-      "Alterações não salvas no aplicativo podem ser perdidas. Confirme apenas se você possui backup e autorização para modificar os dados. Continuar?"
+      "O ADB Fly vai encerrar o aplicativo Android antes de modificar seu banco de dados. " +
+      "Alterações não salvas no aplicativo podem ser perdidas. Prossiga apenas com backup e autorização. Continuar?"
     );
 
   const handleCommitPendingChanges = async () => {
@@ -542,20 +540,18 @@ function AppContent() {
     const failed: Record<string, PendingRowEdit> = {};
 
     for (const [rowKey, rowEdit] of entries) {
-      const assignments = Object.entries(rowEdit.changes)
-        .map(([column, value]) => `"${column}" = ${toSqlValue(value)}`)
+      const changes = Object.entries(rowEdit.changes);
+      const assignments = changes
+        .map(([column]) => `${quoteSqlIdentifier(column)} = ?`)
         .join(", ");
 
       if (!assignments) continue;
 
-      const pkWhere = typeof rowEdit.pkValue === "number"
-        ? String(rowEdit.pkValue)
-        : `'${escapeSqlText(rowEdit.pkValue)}'`;
-
-      const sql = `UPDATE "${selectedTable}" SET ${assignments} WHERE "${pkColumn}" = ${pkWhere}`;
+      const sql = `UPDATE ${quoteSqlIdentifier(selectedTable)} SET ${assignments} WHERE ${quoteSqlIdentifier(pkColumn)} = ?`;
+      const params = [...changes.map(([, value]) => value), rowEdit.pkValue] as Array<string | number | null>;
 
       try {
-        const result = await executeSql(selectedDevice, selectedPackage, selectedDb, sql, databaseKeys[selectedDb]);
+        const result = await executeSql(selectedDevice, selectedPackage, selectedDb, sql, databaseKeys[selectedDb], params);
         if (!result.success) {
           throw new Error(result.message || "Falha ao executar UPDATE");
         }
@@ -591,10 +587,12 @@ function AppContent() {
       });
       return;
     }
-    const values = cols.map(c => newRowData[c.name] === '' || newRowData[c.name] === undefined ? 'NULL' : `'${newRowData[c.name].replace(/'/g, "''")}'`).join(", ");
-    const sql = `INSERT INTO "${selectedTable}" (${cols.map(c => `"${c.name}"`).join(", ")}) VALUES (${values})`;
+    const params = cols.map(c => newRowData[c.name] === undefined ? null : newRowData[c.name]);
+    const placeholders = cols.map(() => '?').join(", ");
+    const sql = `INSERT INTO ${quoteSqlIdentifier(selectedTable)} (${cols.map(c => quoteSqlIdentifier(c.name)).join(", ")}) VALUES (${placeholders})`;
     try {
-      await executeSql(selectedDevice, selectedPackage, selectedDb, sql, databaseKeys[selectedDb]);
+      const result = await executeSql(selectedDevice, selectedPackage, selectedDb, sql, databaseKeys[selectedDb], params);
+      if (!result.success) throw new Error(result.message || "A operação SQLite falhou.");
       setIsAddingInlineRow(false);
       setNewRowData({});
       toast.success("Linha adicionada", {
@@ -621,9 +619,14 @@ function AppContent() {
     if (!confirmSqliteWrite()) return;
     const rowData = tableData.rows[rowIndex];
     const pkValue = rowData[pk];
-    const sql = `DELETE FROM "${selectedTable}" WHERE "${pk}" = ${typeof pkValue === 'number' ? pkValue : `'${pkValue}'`}`;
+    if (typeof pkValue !== 'number' && typeof pkValue !== 'string') {
+      toast.error("Chave primária inválida para exclusão.");
+      return;
+    }
+    const sql = `DELETE FROM ${quoteSqlIdentifier(selectedTable)} WHERE ${quoteSqlIdentifier(pk)} = ?`;
     try {
-      await executeSql(selectedDevice, selectedPackage, selectedDb, sql, databaseKeys[selectedDb]);
+      const result = await executeSql(selectedDevice, selectedPackage, selectedDb, sql, databaseKeys[selectedDb], [pkValue]);
+      if (!result.success) throw new Error(result.message || "A operação SQLite falhou.");
       const rowKey = getRowKey(rowData, rowIndex);
       setPendingRowEdits((prev) => {
         const next = { ...prev };
