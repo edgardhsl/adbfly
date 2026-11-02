@@ -14,12 +14,20 @@ if [[ ! -s src-tauri/Cargo.lock ]]; then
   exit 1
 fi
 
-# Require independent frontend and Rust verification on the *tagged* SHA.
-check_runs="$(gh api "repos/$GITHUB_REPOSITORY/commits/$target_sha/check-runs?per_page=100" --paginate --jq '.check_runs[] | .name + ":" + (.conclusion // "pending")')"
-for required in frontend rust; do
-  if ! grep -Fxq "${required}:success" <<< "$check_runs"; then
-    echo "::error::Missing successful ${required} check for $target_sha"
-    exit 1
+# A random check named "frontend" is not proof that our trusted workflow ran.
+# Require the same successful GitHub Actions run to verify both checks on
+# the exact tagged SHA. The workflow must originate from a push to main.
+runs="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$target_sha&per_page=100"   --jq '.workflow_runs[] | select(.head_sha == "'"$target_sha"'" and .path == ".github/workflows/code-quality.yml" and .event == "push" and .head_branch == "main" and .conclusion == "success") | .id')"
+verified=false
+for run in $runs; do
+  jobs="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run/jobs?per_page=100"     --jq '.jobs[] | select(.conclusion == "success") | .name')"
+  if grep -Fxq frontend <<< "$jobs" && grep -Fxq rust <<< "$jobs"; then
+    verified=true
+    break
   fi
 done
-echo "Verified release commit $target_sha with frontend and rust checks."
+if [[ "$verified" != true ]]; then
+  echo "::error::No trusted successful Code quality workflow with frontend+rust jobs on $target_sha."
+  exit 1
+fi
+echo "Verified release commit $target_sha with trusted CI run $run."
