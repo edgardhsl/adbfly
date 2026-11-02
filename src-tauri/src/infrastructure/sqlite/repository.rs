@@ -454,6 +454,7 @@ impl SqliteRepository {
         // backups during the replacement, with a rollback attempt on failure.
         self.adb.replace_database_snapshot_with_recovery(
             device_id, package_name, &remote_db, &local_db,
+            &original_db, original_wal.as_deref(),
         )?;
 
         Ok(SqlResult {
