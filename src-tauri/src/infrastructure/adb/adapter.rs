@@ -320,16 +320,25 @@ impl AdbAdapter {
         package: &str,
         relative_path: &str,
     ) -> Result<Option<Vec<u8>>, String> {
-        match self.pull_app_file_snapshot(device_id, package, relative_path) {
-            Ok(bytes) => Ok(Some(bytes)),
-            Err(error)
-                if error.contains("No such file")
-                    || error.contains("No such file or directory")
-                    || error.contains("not found") =>
-            {
-                Ok(None)
-            }
-            Err(error) => Err(error),
+        validate_write_destination(relative_path)?;
+        // Probe the exact file under the app UID. A generic "not found" error
+        // could mean the package/run-as binary failed, not a missing SQLite WAL.
+        let probe = format!(
+            "if [ -f {} ]; then printf PRESENT; else printf MISSING; fi",
+            shell_quote(relative_path)?
+        );
+        let run_as = format!(
+            "run-as {} sh -c {}",
+            shell_quote(package)?,
+            shell_quote(&probe)?
+        );
+        let state = self.shell_with_timeout(
+            device_id, &run_as, Duration::from_secs(DEFAULT_TIMEOUT_SECS)
+        )?;
+        match state.trim() {
+            "MISSING" => Ok(None),
+            "PRESENT" => self.pull_app_file_snapshot(device_id, package, relative_path).map(Some),
+            _ => Err(format!("Unexpected Android file probe result: {}", state)),
         }
     }
 
