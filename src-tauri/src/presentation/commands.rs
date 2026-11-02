@@ -29,8 +29,8 @@ where
 {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || task(state.as_ref()))
-    .await
-    .map_err(|e| e.to_string())?
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -116,9 +116,12 @@ pub async fn list_tables(
     db_key: Option<String>,
 ) -> Result<Vec<String>, String> {
     run_with_state(state, move |app_state| {
-        app_state
-            .database_use_cases
-            .list_tables(&device_id, &package_name, &db_name, db_key.as_deref())
+        app_state.database_use_cases.list_tables(
+            &device_id,
+            &package_name,
+            &db_name,
+            db_key.as_deref(),
+        )
     })
     .await
 }
@@ -133,9 +136,13 @@ pub async fn get_table_schema(
     db_key: Option<String>,
 ) -> Result<crate::domain::entities::TableSchema, String> {
     run_with_state(state, move |app_state| {
-        app_state
-            .database_use_cases
-            .get_table_schema(&device_id, &package_name, &db_name, &table, db_key.as_deref())
+        app_state.database_use_cases.get_table_schema(
+            &device_id,
+            &package_name,
+            &db_name,
+            &table,
+            db_key.as_deref(),
+        )
     })
     .await
 }
@@ -177,11 +184,19 @@ pub async fn execute_sql(
     db_name: String,
     sql: String,
     db_key: Option<String>,
+    params: Option<Vec<serde_json::Value>>,
+    expected_rows: Option<u64>,
 ) -> Result<crate::domain::entities::SqlResult, String> {
     run_with_state(state, move |app_state| {
-        app_state
-            .database_use_cases
-            .execute_sql(&device_id, &package_name, &db_name, &sql, db_key.as_deref())
+        app_state.database_use_cases.execute_sql(
+            &device_id,
+            &package_name,
+            &db_name,
+            &sql,
+            db_key.as_deref(),
+            &params.unwrap_or_default(),
+            expected_rows,
+        )
     })
     .await
 }
@@ -252,7 +267,9 @@ fn write_app_config_ini(config: &crate::domain::entities::AppConfig) -> Result<(
         .map_err(|e| format!("Failed to save config file: {}", e))
 }
 
-pub fn ensure_app_config_exists(app: &AppHandle) -> Result<crate::domain::entities::AppConfig, String> {
+pub fn ensure_app_config_exists(
+    app: &AppHandle,
+) -> Result<crate::domain::entities::AppConfig, String> {
     let config_path = app_config_file_path(app)?;
 
     if let Some(parent) = config_path.parent() {
@@ -268,7 +285,11 @@ pub fn ensure_app_config_exists(app: &AppHandle) -> Result<crate::domain::entiti
             openssl_include_dir: parse_ini_value(&content, "openssl_include_dir"),
             preferred_locale: {
                 let locale = parse_ini_value(&content, "preferred_locale");
-                if locale.is_empty() { "en".to_string() } else { locale }
+                if locale.is_empty() {
+                    "en".to_string()
+                } else {
+                    locale
+                }
             },
             config_file_path: config_path.to_string_lossy().to_string(),
         };
@@ -312,7 +333,11 @@ pub async fn save_app_config(
                 .unwrap_or_else(|| "en".to_string())
                 .trim()
                 .to_string();
-            if locale.is_empty() { "en".to_string() } else { locale }
+            if locale.is_empty() {
+                "en".to_string()
+            } else {
+                locale
+            }
         },
         config_file_path: config_path.to_string_lossy().to_string(),
     };

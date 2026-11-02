@@ -1,23 +1,42 @@
-name: Bump version and create tag
+name: Create verified release tag
 
 on:
-  push:
-    branches:
-      - main
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag matching package, Cargo and Tauri versions (vX.Y.Z)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  checks: read
 
 jobs:
-  build:
+  tag:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
-    - uses: actions/checkout@v4
-      with:
-        fetch-depth: '0'
-
-    - name: Bump version and push tag
-      uses: anothrNick/github-tag-action@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        WITH_V: true
-        DEFAULT_BUMP: patch
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+          cache: npm
+      - name: Check manifest versions
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: node scripts/check-release-version.cjs
+      - name: Enforce main branch and successful checks
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/verify-release-gate.sh
+      - name: Create annotated tag
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$RELEASE_TAG" -m "Release $RELEASE_TAG"
+          git push origin "$RELEASE_TAG"

@@ -11,6 +11,7 @@ import { listDevices, listPackages, getDeviceOverview, listDeviceFiles, getLogca
 import type { AppConfig, DeviceFileEntry, SortInfo, FilterInfo, TableSchema } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { compileLogcatFilterQuery, filterLogcatLines, mergeLogSnapshots } from "@/lib/logcat-utils";
+import { buildSqliteUpdateBatches } from "@/lib/sqlite-update-batches";
 import { useI18n, I18nProvider } from "@/lib/I18nContext";
 import type { Locale } from "@/lib/i18n";
 import { OVERVIEW_USAGE_HISTORY, type UsageHistoryPoint, type WorkspaceView } from "@/lib/workspace-navigation";
@@ -440,10 +441,8 @@ function AppContent() {
 
   const pkColumn = tableSchema?.columns.find((c) => c.primary_key)?.name;
 
-  const escapeSqlText = (value: unknown) => String(value).replace(/'/g, "''");
+  const quoteSqlIdentifier = (identifier: string) => '"' + identifier.replace(/"/g, '""') + '"';
 
-  const toSqlValue = (value: string) =>
-    value === "NULL" || value === "" ? "NULL" : `'${escapeSqlText(value)}'`;
 
   const getRowKey = (row: Record<string, unknown>, rowIndex: number) => {
     if (!pkColumn) return `row:${rowIndex}`;
@@ -519,6 +518,12 @@ function AppContent() {
     setEditingCell(null);
   };
 
+  const confirmSqliteWrite = () =>
+    window.confirm(
+      "O ADB Fly vai encerrar o aplicativo Android antes de modificar seu banco de dados. " +
+      "Alterações não salvas no aplicativo podem ser perdidas. Prossiga apenas com backup e autorização. Continuar?"
+    );
+
   const handleCommitPendingChanges = async () => {
     if (!selectedDevice || !selectedPackage || !selectedDb || !selectedTable || !pkColumn) return;
 
@@ -529,32 +534,37 @@ function AppContent() {
       });
       return;
     }
+    if (!confirmSqliteWrite()) return;
 
     setSavingPendingRows(true);
 
     const failed: Record<string, PendingRowEdit> = {};
+    let batches;
+    try {
+      batches = buildSqliteUpdateBatches(selectedTable, pkColumn, entries.map(([rowKey, edit]) => ({
+        rowKey, pkValue: edit.pkValue, changes: edit.changes,
+      })));
+    } catch (error) {
+      console.error("SQLite batch validation:", error);
+      setSavingPendingRows(false);
+      toast.error("Falha ao preparar alterações", { description: String(error) });
+      return;
+    }
 
-    for (const [rowKey, rowEdit] of entries) {
-      const assignments = Object.entries(rowEdit.changes)
-        .map(([column, value]) => `"${column}" = ${toSqlValue(value)}`)
-        .join(", ");
-
-      if (!assignments) continue;
-
-      const pkWhere = typeof rowEdit.pkValue === "number"
-        ? String(rowEdit.pkValue)
-        : `'${escapeSqlText(rowEdit.pkValue)}'`;
-
-      const sql = `UPDATE "${selectedTable}" SET ${assignments} WHERE "${pkColumn}" = ${pkWhere}`;
-
+    for (const batch of batches) {
       try {
-        const result = await executeSql(selectedDevice, selectedPackage, selectedDb, sql, databaseKeys[selectedDb]);
-        if (!result.success) {
-          throw new Error(result.message || "Falha ao executar UPDATE");
+        const result = await executeSql(
+          selectedDevice, selectedPackage, selectedDb, batch.sql, databaseKeys[selectedDb], batch.params, batch.rowKeys.length
+        );
+        if (!result.success || result.rows_affected !== batch.rowKeys.length) {
+          throw new Error(result.message || "Quantidade de linhas atualizadas não corresponde ao lote.");
         }
       } catch (error) {
-        console.error("Commit row error:", error);
-        failed[rowKey] = rowEdit;
+        console.error("SQLite batch commit:", error);
+        for (const rowKey of batch.rowKeys) {
+          const edit = pendingRowEdits[rowKey];
+          if (edit) failed[rowKey] = edit;
+        }
       }
     }
 
@@ -576,6 +586,7 @@ function AppContent() {
 
   const handleAddRow = async () => {
     if (!selectedDevice || !selectedPackage || !selectedDb || !selectedTable) return;
+    if (!confirmSqliteWrite()) return;
     const cols = tableSchema?.columns.filter(c => !c.primary_key || c.col_type.toUpperCase() !== "INTEGER") || [];
     if (cols.length === 0) {
       toast.warning("Nao ha colunas editaveis", {
@@ -583,10 +594,12 @@ function AppContent() {
       });
       return;
     }
-    const values = cols.map(c => newRowData[c.name] === '' || newRowData[c.name] === undefined ? 'NULL' : `'${newRowData[c.name].replace(/'/g, "''")}'`).join(", ");
-    const sql = `INSERT INTO "${selectedTable}" (${cols.map(c => `"${c.name}"`).join(", ")}) VALUES (${values})`;
+    const params = cols.map(c => newRowData[c.name] === undefined ? null : newRowData[c.name]);
+    const placeholders = cols.map(() => '?').join(", ");
+    const sql = `INSERT INTO ${quoteSqlIdentifier(selectedTable)} (${cols.map(c => quoteSqlIdentifier(c.name)).join(", ")}) VALUES (${placeholders})`;
     try {
-      await executeSql(selectedDevice, selectedPackage, selectedDb, sql, databaseKeys[selectedDb]);
+      const result = await executeSql(selectedDevice, selectedPackage, selectedDb, sql, databaseKeys[selectedDb], params);
+      if (!result.success) throw new Error(result.message || "A operação SQLite falhou.");
       setIsAddingInlineRow(false);
       setNewRowData({});
       toast.success("Linha adicionada", {
@@ -610,11 +623,17 @@ function AppContent() {
       });
       return;
     }
+    if (!confirmSqliteWrite()) return;
     const rowData = tableData.rows[rowIndex];
     const pkValue = rowData[pk];
-    const sql = `DELETE FROM "${selectedTable}" WHERE "${pk}" = ${typeof pkValue === 'number' ? pkValue : `'${pkValue}'`}`;
+    if (typeof pkValue !== 'number' && typeof pkValue !== 'string') {
+      toast.error("Chave primária inválida para exclusão.");
+      return;
+    }
+    const sql = `DELETE FROM ${quoteSqlIdentifier(selectedTable)} WHERE ${quoteSqlIdentifier(pk)} = ?`;
     try {
-      await executeSql(selectedDevice, selectedPackage, selectedDb, sql, databaseKeys[selectedDb]);
+      const result = await executeSql(selectedDevice, selectedPackage, selectedDb, sql, databaseKeys[selectedDb], [pkValue]);
+      if (!result.success) throw new Error(result.message || "A operação SQLite falhou.");
       const rowKey = getRowKey(rowData, rowIndex);
       setPendingRowEdits((prev) => {
         const next = { ...prev };
