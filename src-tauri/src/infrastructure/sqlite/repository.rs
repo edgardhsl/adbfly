@@ -450,6 +450,7 @@ impl SqliteRepository {
         sql: &str,
         db_key: Option<&str>,
         params: &[serde_json::Value],
+        expected_rows: Option<u64>,
     ) -> Result<SqlResult, String> {
         let bound: Vec<rusqlite::types::Value> = params
             .iter()
@@ -525,6 +526,15 @@ impl SqliteRepository {
         let rows_affected = conn
             .execute(sql, rusqlite::params_from_iter(bound.iter()))
             .map_err(|e| format!("Failed to execute: {}", e))? as u64;
+        // Reject missing/stale primary keys before any remote staging occurs.
+        if let Some(expected) = expected_rows {
+            if rows_affected != expected {
+                return Err(format!(
+                    "SQLite changed rows mismatch: expected {}, affected {}. No remote write was performed.",
+                    expected, rows_affected
+                ));
+            }
+        }
         // The pragma returns (busy, log_frames, checkpointed_frames); execute_batch
         // hides this status and can silently accept an incomplete checkpoint.
         let (busy, log_frames, checkpointed_frames): (i64, i64, i64) = conn
