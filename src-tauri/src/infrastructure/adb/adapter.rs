@@ -432,6 +432,99 @@ impl AdbAdapter {
         }
     }
 
+    /// Replace a stopped application's SQLite DB, retaining the old DB and
+    /// sidecars until read-back verification succeeds. A pending marker is kept
+    /// if interrupted so a subsequent operation cannot overwrite recovery data.
+    pub fn replace_database_snapshot_with_recovery(
+        &self,
+        device_id: &str,
+        package: &str,
+        relative_db: &str,
+        data: &[u8],
+    ) -> Result<(), String> {
+        validate_write_destination(relative_db)?;
+        let backup_db = format!("{}.adbfly-backup", relative_db);
+        let wal = format!("{}-wal", relative_db);
+        let shm = format!("{}-shm", relative_db);
+        let backup_wal = format!("{}-wal.adbfly-backup", relative_db);
+        let backup_shm = format!("{}-shm.adbfly-backup", relative_db);
+        let marker = format!("{}.adbfly-pending", relative_db);
+        let nonce = SystemTime::now().duration_since(UNIX_EPOCH)
+            .map_err(|e| e.to_string())?.as_nanos();
+        let staged = format!("{}.adbfly-stage-{}", relative_db, nonce);
+
+        let run_private = |script: &str| -> Result<String, String> {
+            let cmd = format!("run-as {} sh -c {}", shell_quote(package)?, shell_quote(script)?);
+            self.shell_with_timeout(device_id, &cmd, Duration::from_secs(DB_IO_TIMEOUT_SECS))
+        };
+        let q = |path: &str| shell_quote(path);
+
+        // Fail closed if any previous write was interrupted: backups must remain
+        // untouched until explicit recovery, not automatically discarded.
+        let preflight = format!(
+            "test ! -e {0} && test ! -e {1} && test ! -e {2} && test ! -e {3}",
+            q(&marker)?, q(&backup_db)?, q(&backup_wal)?, q(&backup_shm)?
+        );
+        run_private(&preflight).map_err(|_| {
+            "An earlier ADB Fly database write may be incomplete; recovery backups exist in the app's databases directory. Refusing to overwrite them.".to_string()
+        })?;
+
+        let stage_result = self.stream_private_file(device_id, package, &staged, data);
+        if let Err(error) = stage_result {
+            let _ = run_private(&format!("rm -f -- {}", q(&staged)?));
+            return Err(error);
+        }
+
+        let commit = format!(
+            "set -e; umask 077; : > {marker}; cp -- {db} {bak}; \
+            if [ -f {wal} ]; then mv -f -- {wal} {bwal}; fi; \
+            if [ -f {shm} ]; then mv -f -- {shm} {bshm}; fi; \
+            mv -f -- {stage} {db}",
+            marker=q(&marker)?, db=q(relative_db)?, bak=q(&backup_db)?,
+            wal=q(&wal)?, bwal=q(&backup_wal)?,
+            shm=q(&shm)?, bshm=q(&backup_shm)?, stage=q(&staged)?
+        );
+        let committed = run_private(&commit);
+        let verification = match committed {
+            Ok(_) => self.pull_app_file_snapshot(device_id, package, relative_db)
+                .and_then(|received| if received == data { Ok(()) }
+                    else { Err("Remote database differs from the verified local snapshot".to_string()) }),
+            Err(error) => Err(error),
+        };
+
+        if let Err(error) = verification {
+            // Best-effort rollback. If the device disconnects, the marker and
+            // backups remain for explicit operator recovery on the next attempt.
+            let rollback = format!(
+                "set -e; if [ -f {bak} ]; then mv -f -- {bak} {db}; fi; \
+                if [ -f {bwal} ]; then mv -f -- {bwal} {wal}; fi; \
+                if [ -f {bshm} ]; then mv -f -- {bshm} {shm}; fi; \
+                rm -f -- {stage} {marker}",
+                bak=q(&backup_db)?, db=q(relative_db)?,
+                bwal=q(&backup_wal)?, wal=q(&wal)?,
+                bshm=q(&backup_shm)?, shm=q(&shm)?,
+                stage=q(&staged)?, marker=q(&marker)?
+            );
+            if let Err(rollback_error) = run_private(&rollback) {
+                return Err(format!(
+                    "Database replacement failed: {}. RECOVERY REQUIRED; original backup files were retained. Rollback error: {}",
+                    error, rollback_error
+                ));
+            }
+            return Err(format!("Database replacement failed and original files were restored: {}", error));
+        }
+
+        let cleanup = format!(
+            "rm -f -- {} {} {} {} {}",
+            q(&backup_db)?, q(&backup_wal)?, q(&backup_shm)?,
+            q(&marker)?, q(&staged)?
+        );
+        run_private(&cleanup).map_err(|e| format!(
+            "New database verified, but recovery backups could not be cleaned: {}. Manual inspection required.", e
+        ))?;
+        Ok(())
+    }
+
     pub fn delete_app_file_snapshot(
         &self,
         device_id: &str,
