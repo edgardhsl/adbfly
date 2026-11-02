@@ -10,9 +10,11 @@ on:
 
 permissions:
   contents: write
+  checks: read
 
 jobs:
   tag:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -26,6 +28,10 @@ jobs:
         env:
           RELEASE_TAG: ${{ inputs.tag }}
         run: node scripts/check-release-version.cjs
+      - name: Enforce main branch and successful checks
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/verify-release-gate.sh
       - name: Create annotated tag
         env:
           RELEASE_TAG: ${{ inputs.tag }}
