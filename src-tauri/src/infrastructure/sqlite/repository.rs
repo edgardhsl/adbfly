@@ -258,8 +258,8 @@ impl SqliteRepository {
         let tables: Vec<String> = stmt
             .query_map([], |row| row.get(0))
             .map_err(|e| e.to_string())?
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| format!("SQLite row decoding failed: {}", e))?;
 
         Ok(tables)
     }
@@ -291,8 +291,8 @@ impl SqliteRepository {
                 })
             })
             .map_err(|e| e.to_string())?
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| format!("SQLite row decoding failed: {}", e))?;
 
         Ok(TableSchema {
             name: table.to_string(),
@@ -432,8 +432,8 @@ impl SqliteRepository {
                 Ok(serde_json::Value::Object(map))
             })
             .map_err(|e| e.to_string())?
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| format!("SQLite row decoding failed: {}", e))?;
 
         Ok(TableData {
             columns: column_names,
@@ -510,8 +510,8 @@ impl SqliteRepository {
                     Ok(serde_json::Value::Object(map))
                 })
                 .map_err(|e| e.to_string())?
-                .filter_map(|r| r.ok())
-                .collect();
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(|e| format!("SQLite row decoding failed: {}", e))?;
 
             return Ok(SqlResult {
                 success: true,
