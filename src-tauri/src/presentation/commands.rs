@@ -185,6 +185,7 @@ pub async fn execute_sql(
     sql: String,
     db_key: Option<String>,
     params: Option<Vec<serde_json::Value>>,
+    expected_rows: Option<u64>,
 ) -> Result<crate::domain::entities::SqlResult, String> {
     run_with_state(state, move |app_state| {
         app_state.database_use_cases.execute_sql(
@@ -194,6 +195,7 @@ pub async fn execute_sql(
             &sql,
             db_key.as_deref(),
             &params.unwrap_or_default(),
+            expected_rows,
         )
     })
     .await
