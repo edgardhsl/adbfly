@@ -14,7 +14,7 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 const DEFAULT_TIMEOUT_SECS: u64 = 8;
 const DB_IO_TIMEOUT_SECS: u64 = 90;
 
-fn shell_quote(input: &str) -> Result<String, String> {
+pub(crate) fn shell_quote(input: &str) -> Result<String, String> {
     if input.contains('\0') || input.contains('\n') || input.contains('\r') {
         return Err("Invalid character in Android shell argument".to_string());
     }
