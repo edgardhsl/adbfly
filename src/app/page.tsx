@@ -441,6 +441,7 @@ function AppContent() {
   const pkColumn = tableSchema?.columns.find((c) => c.primary_key)?.name;
 
   const escapeSqlText = (value: unknown) => String(value).replace(/'/g, "''");
+  const quoteSqlIdentifier = (identifier: string) => '"' + identifier.replace(/"/g, '""') + '"';
 
   const toSqlValue = (value: string) =>
     value === "NULL" || value === "" ? "NULL" : `'${escapeSqlText(value)}'`;
@@ -536,7 +537,7 @@ function AppContent() {
 
     for (const [rowKey, rowEdit] of entries) {
       const assignments = Object.entries(rowEdit.changes)
-        .map(([column, value]) => `"${column}" = ${toSqlValue(value)}`)
+        .map(([column, value]) => `${quoteSqlIdentifier(column)} = ${toSqlValue(value)}`)
         .join(", ");
 
       if (!assignments) continue;
@@ -545,7 +546,7 @@ function AppContent() {
         ? String(rowEdit.pkValue)
         : `'${escapeSqlText(rowEdit.pkValue)}'`;
 
-      const sql = `UPDATE "${selectedTable}" SET ${assignments} WHERE "${pkColumn}" = ${pkWhere}`;
+      const sql = `UPDATE ${quoteSqlIdentifier(selectedTable)} SET ${assignments} WHERE ${quoteSqlIdentifier(pkColumn)} = ${pkWhere}`;
 
       try {
         const result = await executeSql(selectedDevice, selectedPackage, selectedDb, sql, databaseKeys[selectedDb]);
@@ -584,7 +585,7 @@ function AppContent() {
       return;
     }
     const values = cols.map(c => newRowData[c.name] === '' || newRowData[c.name] === undefined ? 'NULL' : `'${newRowData[c.name].replace(/'/g, "''")}'`).join(", ");
-    const sql = `INSERT INTO "${selectedTable}" (${cols.map(c => `"${c.name}"`).join(", ")}) VALUES (${values})`;
+    const sql = `INSERT INTO ${quoteSqlIdentifier(selectedTable)} (${cols.map(c => quoteSqlIdentifier(c.name)).join(", ")}) VALUES (${values})`;
     try {
       await executeSql(selectedDevice, selectedPackage, selectedDb, sql, databaseKeys[selectedDb]);
       setIsAddingInlineRow(false);
@@ -612,7 +613,7 @@ function AppContent() {
     }
     const rowData = tableData.rows[rowIndex];
     const pkValue = rowData[pk];
-    const sql = `DELETE FROM "${selectedTable}" WHERE "${pk}" = ${typeof pkValue === 'number' ? pkValue : `'${pkValue}'`}`;
+    const sql = `DELETE FROM ${quoteSqlIdentifier(selectedTable)} WHERE ${quoteSqlIdentifier(pk)} = ${typeof pkValue === 'number' ? pkValue : `'${escapeSqlText(pkValue)}'`}`;
     try {
       await executeSql(selectedDevice, selectedPackage, selectedDb, sql, databaseKeys[selectedDb]);
       const rowKey = getRowKey(rowData, rowIndex);
