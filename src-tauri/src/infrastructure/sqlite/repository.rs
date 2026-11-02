@@ -25,9 +25,16 @@ impl SqliteRepository {
         Ok(())
     }
 
+    fn quote_shell_arg(value: &str) -> Result<String, String> {
+        if value.contains('\0') || value.contains('\n') || value.contains('\r') {
+            return Err("Invalid Android package name".to_string());
+        }
+        Ok(format!("'{}'", value.replace('\'', "'\"'\"'")))
+    }
+
     fn ensure_package_stopped(&self, device_id: &str, package: &str) -> Result<(), String> {
         // Writing a snapshot over a database held open by Android risks corrupting WAL state.
-        let quoted_package = crate::infrastructure::adb::adapter::shell_quote(package)?;
+        let quoted_package = Self::quote_shell_arg(package)?;
         let command = format!(
             "if ! command -v pidof >/dev/null 2>&1; then echo UNKNOWN; elif pidof -s {} >/dev/null 2>&1; then echo RUNNING; else echo STOPPED; fi",
             quoted_package
