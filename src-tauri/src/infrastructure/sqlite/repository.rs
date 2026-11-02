@@ -401,9 +401,25 @@ impl SqliteRepository {
         let rows_affected = conn
             .execute(sql, [])
             .map_err(|e| format!("Failed to execute: {}", e))? as u64;
-        // Consolidate local WAL changes before copying the snapshot to Android.
-        conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
-            .map_err(|e| format!("Failed to checkpoint SQLite before writing: {}", e))?;
+        // The pragma returns (busy, log_frames, checkpointed_frames); execute_batch
+        // hides this status and can silently accept an incomplete checkpoint.
+        let (busy, log_frames, checkpointed_frames): (i64, i64, i64) = conn
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })
+            .map_err(|e| format!("Failed to checkpoint WAL: {}", e))?;
+        if busy != 0 || log_frames != checkpointed_frames {
+            return Err(format!(
+                "WAL checkpoint incomplete (busy={}, frames={}, checkpointed={}); refusing to write",
+                busy, log_frames, checkpointed_frames
+            ));
+        }
+        let integrity: String = conn
+            .query_row("PRAGMA quick_check(1)", [], |row| row.get(0))
+            .map_err(|e| format!("Failed to verify local SQLite integrity: {}", e))?;
+        if integrity != "ok" {
+            return Err(format!("SQLite quick_check failed: {}; refusing to write", integrity));
+        }
         drop(conn);
 
         let local_db = std::fs::read(&local_path)
@@ -414,29 +430,12 @@ impl SqliteRepository {
         self.adb
             .push_app_file_snapshot(device_id, package_name, &remote_db, &local_db)?;
 
+        // WAL frames were checkpointed into the main DB above. Do not
+        // transmit the local -shm: it is a transient shared-memory index.
+        // Cleanup errors are not harmless: abort the operation visibly.
         for suffix in ["-wal", "-shm"] {
-            let local_sidecar = local_path.with_file_name(format!("{}{}", db_name, suffix));
             let remote_sidecar = format!("{}{}", remote_db, suffix);
-
-            if local_sidecar.exists() {
-                let sidecar_data = std::fs::read(&local_sidecar).map_err(|e| {
-                    format!(
-                        "Failed to read sqlite sidecar '{}': {}",
-                        local_sidecar.display(),
-                        e
-                    )
-                })?;
-                self.adb.push_app_file_snapshot(
-                    device_id,
-                    package_name,
-                    &remote_sidecar,
-                    &sidecar_data,
-                )?;
-            } else {
-                let _ = self
-                    .adb
-                    .delete_app_file_snapshot(device_id, package_name, &remote_sidecar);
-            }
+            self.adb.delete_app_file_snapshot(device_id, package_name, &remote_sidecar)?;
         }
 
         Ok(SqlResult {
