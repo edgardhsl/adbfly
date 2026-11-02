@@ -443,8 +443,7 @@ function AppContent() {
   const escapeSqlText = (value: unknown) => String(value).replace(/'/g, "''");
   const quoteSqlIdentifier = (identifier: string) => '"' + identifier.replace(/"/g, '""') + '"';
 
-  const toSqlValue = (value: string) =>
-    value === "NULL" || value === "" ? "NULL" : `'${escapeSqlText(value)}'`;
+  const toSqlValue = (value: string) => `'${escapeSqlText(value)}'`;
 
   const getRowKey = (row: Record<string, unknown>, rowIndex: number) => {
     if (!pkColumn) return `row:${rowIndex}`;
@@ -584,10 +583,11 @@ function AppContent() {
       });
       return;
     }
-    const values = cols.map(c => newRowData[c.name] === '' || newRowData[c.name] === undefined ? 'NULL' : `'${newRowData[c.name].replace(/'/g, "''")}'`).join(", ");
+    const values = cols.map(c => newRowData[c.name] === undefined ? 'NULL' : toSqlValue(newRowData[c.name])).join(", ");
     const sql = `INSERT INTO ${quoteSqlIdentifier(selectedTable)} (${cols.map(c => quoteSqlIdentifier(c.name)).join(", ")}) VALUES (${values})`;
     try {
-      await executeSql(selectedDevice, selectedPackage, selectedDb, sql, databaseKeys[selectedDb]);
+      const result = await executeSql(selectedDevice, selectedPackage, selectedDb, sql, databaseKeys[selectedDb]);
+      if (!result.success) throw new Error(result.message || "A operação SQLite falhou.");
       setIsAddingInlineRow(false);
       setNewRowData({});
       toast.success("Linha adicionada", {
@@ -615,7 +615,8 @@ function AppContent() {
     const pkValue = rowData[pk];
     const sql = `DELETE FROM ${quoteSqlIdentifier(selectedTable)} WHERE ${quoteSqlIdentifier(pk)} = ${typeof pkValue === 'number' ? pkValue : `'${escapeSqlText(pkValue)}'`}`;
     try {
-      await executeSql(selectedDevice, selectedPackage, selectedDb, sql, databaseKeys[selectedDb]);
+      const result = await executeSql(selectedDevice, selectedPackage, selectedDb, sql, databaseKeys[selectedDb]);
+      if (!result.success) throw new Error(result.message || "A operação SQLite falhou.");
       const rowKey = getRowKey(rowData, rowIndex);
       setPendingRowEdits((prev) => {
         const next = { ...prev };
