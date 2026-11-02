@@ -12,6 +12,15 @@ fn quote_identifier(name: &str) -> Result<String, String> {
     Ok(format!("\"{}\"", name.replace('"', "\"\"")))
 }
 
+fn has_numeric_affinity(declared_type: &str) -> bool {
+    let kind = declared_type.to_ascii_uppercase();
+    if kind.contains("CHAR") || kind.contains("CLOB") || kind.contains("TEXT") || kind.contains("BLOB") {
+        return false;
+    }
+    kind.contains("INT") || kind.contains("REAL") || kind.contains("FLOA")
+        || kind.contains("DOUB") || kind.contains("NUM") || kind.contains("DEC")
+}
+
 pub struct SqliteRepository {
     adb: AdbAdapter,
 }
@@ -238,17 +247,18 @@ impl SqliteRepository {
         let mut count_sql = format!("SELECT COUNT(*) FROM {}", table_ident);
 
         // Column identifiers must match the schema; values are always bound as parameters.
-        let mut allowed_columns = std::collections::HashSet::new();
+        let mut column_types = std::collections::HashMap::<String, String>::new();
         let mut schema = conn
             .prepare(&format!("PRAGMA table_info({})", table_ident))
             .map_err(|e| format!("Failed to inspect table schema: {}", e))?;
-        let column_names = schema
-            .query_map([], |row| row.get::<_, String>(1))
+        let columns = schema
+            .query_map([], |row| Ok((row.get::<_, String>(1)?, row.get::<_, String>(2)?)))
             .map_err(|e| e.to_string())?;
-        for column in column_names {
-            allowed_columns.insert(column.map_err(|e| e.to_string())?);
+        for column in columns {
+            let (name, declared_type) = column.map_err(|e| e.to_string())?;
+            column_types.insert(name, declared_type);
         }
-        if allowed_columns.is_empty() {
+        if column_types.is_empty() {
             return Err("Table has no available columns".to_string());
         }
 
@@ -256,16 +266,23 @@ impl SqliteRepository {
         if let Some(filters) = filters {
             let mut clauses = Vec::new();
             for filter in filters.into_iter().filter(|filter| !filter.value.is_empty()) {
-                if !allowed_columns.contains(&filter.column) {
+                if !column_types.contains_key(&filter.column) {
                     return Err(format!("Unknown filter column: {}", filter.column));
                 }
                 let column = quote_identifier(&filter.column)?;
                 let value = filter.value.trim();
-                if let Ok(number) = value.parse::<f64>() {
-                    if number.is_finite() {
+                if column_types.get(&filter.column).is_some_and(|kind| has_numeric_affinity(kind)) {
+                    if let Ok(number) = value.parse::<i64>() {
                         clauses.push(format!("{} = ?", column));
-                        filter_values.push(rusqlite::types::Value::Real(number));
+                        filter_values.push(rusqlite::types::Value::Integer(number));
                         continue;
+                    }
+                    if let Ok(number) = value.parse::<f64>() {
+                        if number.is_finite() {
+                            clauses.push(format!("{} = ?", column));
+                            filter_values.push(rusqlite::types::Value::Real(number));
+                            continue;
+                        }
                     }
                 }
                 clauses.push(format!("{} LIKE ?", column));
@@ -279,7 +296,7 @@ impl SqliteRepository {
         }
 
         if let Some(sort) = sort {
-            if !allowed_columns.contains(&sort.column) {
+            if !column_types.contains_key(&sort.column) {
                 return Err(format!("Unknown sort column: {}", sort.column));
             }
             let direction = match sort.direction.to_ascii_uppercase().as_str() {
@@ -436,5 +453,25 @@ impl SqliteRepository {
             rows: vec![],
             rows_affected,
         })
+    }
+}
+
+#[cfg(test)]
+mod security_tests {
+    use super::{has_numeric_affinity, quote_identifier};
+
+    #[test]
+    fn identifiers_escape_double_quotes() {
+        assert_eq!(quote_identifier("odd\"name").unwrap(), "\"odd\"\"name\"");
+        assert!(quote_identifier("bad\0name").is_err());
+    }
+
+    #[test]
+    fn filter_affinity_preserves_textual_numbers() {
+        assert!(!has_numeric_affinity("TEXT"));
+        assert!(!has_numeric_affinity("VARCHAR(40)"));
+        assert!(!has_numeric_affinity("BLOB"));
+        assert!(has_numeric_affinity("INTEGER"));
+        assert!(has_numeric_affinity("REAL"));
     }
 }
