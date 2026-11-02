@@ -160,7 +160,7 @@ Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) before
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) file.
+Licensed under the GNU General Public License v3.0 (GPL-3.0). See [LICENSE](LICENSE).
 
 ---
 
