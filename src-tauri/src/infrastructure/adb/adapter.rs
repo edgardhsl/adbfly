@@ -22,6 +22,23 @@ pub(crate) fn shell_quote(input: &str) -> Result<String, String> {
 }
 
 
+fn validate_write_destination(path: &str) -> Result<(), String> {
+    let filename = path.strip_prefix("databases/")
+        .ok_or_else(|| "Only files inside the Android databases directory can be written".to_string())?;
+    if filename.is_empty()
+        || filename == "." || filename == ".."
+        || filename.contains("..")
+        || filename.contains('/')
+        || filename.contains('\\')
+        || filename.contains('\0')
+        || filename.contains('\n')
+        || filename.contains('\r')
+    {
+        return Err("Invalid database snapshot path".to_string());
+    }
+    Ok(())
+}
+
 pub struct AdbAdapter;
 
 impl AdbAdapter {
@@ -321,6 +338,7 @@ impl AdbAdapter {
         relative_path: &str,
         data: &[u8],
     ) -> Result<(), String> {
+        validate_write_destination(relative_path)?;
         let local_tmp = NamedTempFile::new()
             .map_err(|e| format!("Failed to create temporary snapshot file: {}", e))?;
         std::fs::write(local_tmp.path(), data)
@@ -328,7 +346,7 @@ impl AdbAdapter {
 
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_millis())
+            .map(|d| d.as_nanos())
             .unwrap_or(0);
 
         let local_tmp_path = local_tmp.path().to_string_lossy().to_string();
@@ -338,36 +356,53 @@ impl AdbAdapter {
             nonce
         );
 
-        self.run_with_timeout(
-            &["-s", device_id, "push", &local_tmp_path, &remote_tmp],
-            Duration::from_secs(DB_IO_TIMEOUT_SECS),
-        )?;
+        // Always attempt to remove the staging copy, including after adb push failures.
+        let remote_quoted = shell_quote(&remote_tmp)?;
+        let result = (|| -> Result<(), String> {
+            self.run_with_timeout(
+                &["-s", device_id, "push", &local_tmp_path, &remote_tmp],
+                Duration::from_secs(DB_IO_TIMEOUT_SECS),
+            )?;
 
-        let inner_command = format!(
-            "cp -- {} {} && chmod 600 {}",
-            shell_quote(&remote_tmp)?,
-            shell_quote(relative_path)?,
-            shell_quote(relative_path)?
-        );
-        let run_as_cmd = format!(
-            "run-as {} sh -c {}",
-            shell_quote(package)?,
-            shell_quote(&inner_command)?
-        );
-        let result = self.shell_with_timeout(
-            device_id,
-            &run_as_cmd,
-            Duration::from_secs(DB_IO_TIMEOUT_SECS),
-        );
+            // adb push commonly creates readable files; restrict staging as soon as possible.
+            let chmod_cmd = format!("chmod 600 -- {}", remote_quoted);
+            self.shell_with_timeout(
+                device_id,
+                &chmod_cmd,
+                Duration::from_secs(DEFAULT_TIMEOUT_SECS),
+            )?;
 
-        let cleanup_cmd = format!("rm -f -- {}", shell_quote(&remote_tmp)?);
-        let _ = self.shell_with_timeout(
+            let inner_command = format!(
+                "umask 077; cp -- {} {} && chmod 600 -- {}",
+                remote_quoted,
+                shell_quote(relative_path)?,
+                shell_quote(relative_path)?
+            );
+            let run_as_cmd = format!(
+                "run-as {} sh -c {}",
+                shell_quote(package)?,
+                shell_quote(&inner_command)?
+            );
+            self.shell_with_timeout(
+                device_id,
+                &run_as_cmd,
+                Duration::from_secs(DB_IO_TIMEOUT_SECS),
+            )?;
+            Ok(())
+        })();
+
+        let cleanup_cmd = format!("rm -f -- {}", remote_quoted);
+        let cleanup = self.shell_with_timeout(
             device_id,
             &cleanup_cmd,
             Duration::from_secs(DEFAULT_TIMEOUT_SECS),
         );
+        if let Err(error) = cleanup {
+            return Err(format!("Remote staging cleanup failed ({}); transfer result: {:?}", error, result));
+        }
+        result
 
-        result.map(|_| ())
+
     }
 
     pub fn delete_app_file_snapshot(
@@ -376,6 +411,7 @@ impl AdbAdapter {
         package: &str,
         relative_path: &str,
     ) -> Result<(), String> {
+        validate_write_destination(relative_path)?;
         let run_as_cmd = format!(
             "run-as {} rm -f -- {}",
             shell_quote(package)?,
