@@ -5,6 +5,13 @@ use crate::domain::entities::{
 };
 use crate::infrastructure::adb::AdbAdapter;
 
+fn quote_identifier(name: &str) -> Result<String, String> {
+    if name.is_empty() || name.contains('\0') {
+        return Err("Invalid SQLite identifier".to_string());
+    }
+    Ok(format!("\"{}\"", name.replace('"', "\"\"")))
+}
+
 pub struct SqliteRepository {
     adb: AdbAdapter,
 }
@@ -187,7 +194,7 @@ impl SqliteRepository {
         let conn = self.open_connection(&local_path, db_key)?;
 
         let mut stmt = conn
-            .prepare(&format!("PRAGMA table_info('{}')", table))
+            .prepare(&format!("PRAGMA table_info({})", quote_identifier(table)?))
             .map_err(|e| format!("Failed to prepare: {}", e))?;
 
         let columns: Vec<_> = stmt
@@ -226,41 +233,70 @@ impl SqliteRepository {
 
         let conn = self.open_connection(&local_path, db_key)?;
 
-        let mut sql = format!("SELECT * FROM \"{}\"", table);
-        let mut count_sql = format!("SELECT COUNT(*) FROM \"{}\"", table);
+        let table_ident = quote_identifier(table)?;
+        let mut sql = format!("SELECT * FROM {}", table_ident);
+        let mut count_sql = format!("SELECT COUNT(*) FROM {}", table_ident);
 
-        if let Some(filters) = &filters {
-            if !filters.is_empty() {
-                let filter_clauses: Vec<String> = filters
-                    .iter()
-                    .filter(|f| !f.value.is_empty())
-                    .map(|f| {
-                        let val = f.value.trim();
-                        if val.parse::<f64>().is_ok() {
-                            format!("\"{}\" = {}", f.column, val)
-                        } else {
-                            format!("\"{}\" LIKE '%{}%'", f.column, val.replace("'", "''"))
-                        }
-                    })
-                    .collect();
-                if !filter_clauses.is_empty() {
-                    let where_clause = format!(" WHERE {}", filter_clauses.join(" AND "));
-                    sql.push_str(&where_clause);
-                    count_sql.push_str(&where_clause);
+        // Column identifiers must match the schema; values are always bound as parameters.
+        let mut allowed_columns = std::collections::HashSet::new();
+        let mut schema = conn
+            .prepare(&format!("PRAGMA table_info({})", table_ident))
+            .map_err(|e| format!("Failed to inspect table schema: {}", e))?;
+        let column_names = schema
+            .query_map([], |row| row.get::<_, String>(1))
+            .map_err(|e| e.to_string())?;
+        for column in column_names {
+            allowed_columns.insert(column.map_err(|e| e.to_string())?);
+        }
+        if allowed_columns.is_empty() {
+            return Err("Table has no available columns".to_string());
+        }
+
+        let mut filter_values: Vec<rusqlite::types::Value> = Vec::new();
+        if let Some(filters) = filters {
+            let mut clauses = Vec::new();
+            for filter in filters.into_iter().filter(|filter| !filter.value.is_empty()) {
+                if !allowed_columns.contains(&filter.column) {
+                    return Err(format!("Unknown filter column: {}", filter.column));
                 }
+                let column = quote_identifier(&filter.column)?;
+                let value = filter.value.trim();
+                if let Ok(number) = value.parse::<f64>() {
+                    if number.is_finite() {
+                        clauses.push(format!("{} = ?", column));
+                        filter_values.push(rusqlite::types::Value::Real(number));
+                        continue;
+                    }
+                }
+                clauses.push(format!("{} LIKE ?", column));
+                filter_values.push(rusqlite::types::Value::Text(format!("%{}%", value)));
+            }
+            if !clauses.is_empty() {
+                let where_clause = format!(" WHERE {}", clauses.join(" AND "));
+                sql.push_str(&where_clause);
+                count_sql.push_str(&where_clause);
             }
         }
 
-        if let Some(sort) = &sort {
-            sql.push_str(&format!(" ORDER BY \"{}\" {}", sort.column, sort.direction));
+        if let Some(sort) = sort {
+            if !allowed_columns.contains(&sort.column) {
+                return Err(format!("Unknown sort column: {}", sort.column));
+            }
+            let direction = match sort.direction.to_ascii_uppercase().as_str() {
+                "ASC" => "ASC",
+                "DESC" => "DESC",
+                _ => return Err("Invalid sort direction".to_string()),
+            };
+            sql.push_str(&format!(" ORDER BY {} {}", quote_identifier(&sort.column)?, direction));
         }
 
-        let offset = (page.saturating_sub(1)) * page_size;
-        sql.push_str(&format!(" LIMIT {} OFFSET {}", page_size, offset));
+        let safe_page_size = page_size.clamp(1, 1000);
+        let offset = u64::from(page.saturating_sub(1)) * u64::from(safe_page_size);
+        sql.push_str(&format!(" LIMIT {} OFFSET {}", safe_page_size, offset));
 
         let total_rows: u64 = conn
-            .query_row(&count_sql, [], |row| row.get(0))
-            .unwrap_or(0);
+            .query_row(&count_sql, rusqlite::params_from_iter(filter_values.iter()), |row| row.get(0))
+            .map_err(|e| format!("Failed to count filtered rows: {}", e))?;
 
         let mut stmt = conn
             .prepare(&sql)
@@ -269,7 +305,7 @@ impl SqliteRepository {
         let column_names: Vec<String> = stmt.column_names().iter().map(|s| s.to_string()).collect();
 
         let rows: Vec<serde_json::Value> = stmt
-            .query_map([], |row| {
+            .query_map(rusqlite::params_from_iter(filter_values.iter()), |row| {
                 let mut map = serde_json::Map::new();
                 for (i, name) in column_names.iter().enumerate() {
                     let value: rusqlite::types::Value = row.get(i)?;
