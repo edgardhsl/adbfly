@@ -1,9 +1,8 @@
 use crate::domain::entities::{Device, DeviceFileEntry, Package};
-use std::io::Read;
+use std::io::{Read, Write};
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tempfile::NamedTempFile;
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -331,6 +330,73 @@ impl AdbAdapter {
         }
     }
 
+    /// Streams binary bytes directly into the debuggable app's private directory.
+    /// No copy is ever created in /data/local/tmp or external storage.
+    fn stream_private_file(
+        &self,
+        device_id: &str,
+        package: &str,
+        relative_path: &str,
+        data: &[u8],
+    ) -> Result<(), String> {
+        validate_write_destination(relative_path)?;
+        let shell_script = format!("umask 077; cat > {}", shell_quote(relative_path)?);
+        let mut cmd = Command::new("adb");
+        cmd.args(["-s", device_id, "exec-in", "run-as", package, "sh", "-c", &shell_script])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped());
+        #[cfg(target_os = "windows")]
+        cmd.creation_flags(CREATE_NO_WINDOW);
+
+        let mut child = cmd.spawn().map_err(|e| format!("Failed to stream database to Android: {}", e))?;
+        let mut stdin = child.stdin.take().ok_or("ADB stdin unavailable")?;
+        let mut stderr = child.stderr.take().ok_or("ADB stderr unavailable")?;
+        let result: Result<(), String> = thread::scope(|scope| {
+            let writer = scope.spawn(move || stdin.write_all(data).map_err(|e| e.to_string()));
+            let error_reader = scope.spawn(move || {
+                let mut errors = Vec::new();
+                let _ = stderr.read_to_end(&mut errors);
+                String::from_utf8_lossy(&errors).to_string()
+            });
+            let start = Instant::now();
+            let status = loop {
+                match child.try_wait() {
+                    Ok(Some(status)) => break Ok(status),
+                    Ok(None) if start.elapsed() < Duration::from_secs(DB_IO_TIMEOUT_SECS) => {
+                        thread::sleep(Duration::from_millis(50));
+                    }
+                    Ok(None) => {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        break Err("ADB private write timed out".to_string());
+                    }
+                    Err(error) => {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        break Err(format!("ADB private write failed: {}", error));
+                    }
+                }
+            };
+            let write_result = writer.join().map_err(|_| "ADB writer panicked".to_string())?;
+            let errors = error_reader.join().map_err(|_| "ADB stderr reader panicked".to_string())?;
+            let status = status?;
+            write_result.map_err(|e| format!("ADB upload failed: {}", e))?;
+            if !status.success() {
+                return Err(format!("ADB upload process failed: {}", errors));
+            }
+            Ok(())
+        });
+        result?;
+
+        // exec-in has no reliable remote exit status; verify every byte received.
+        let received = self.pull_app_file_snapshot(device_id, package, relative_path)?;
+        if received != data {
+            return Err("ADB private-file transfer verification failed".to_string());
+        }
+        Ok(())
+    }
+
     pub fn push_app_file_snapshot(
         &self,
         device_id: &str,
@@ -339,70 +405,31 @@ impl AdbAdapter {
         data: &[u8],
     ) -> Result<(), String> {
         validate_write_destination(relative_path)?;
-        let local_tmp = NamedTempFile::new()
-            .map_err(|e| format!("Failed to create temporary snapshot file: {}", e))?;
-        std::fs::write(local_tmp.path(), data)
-            .map_err(|e| format!("Failed to write temporary snapshot file: {}", e))?;
-
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_nanos())
-            .unwrap_or(0);
-
-        let local_tmp_path = local_tmp.path().to_string_lossy().to_string();
-        let remote_tmp = format!(
-            "/data/local/tmp/adbfly_{}_{}",
-            package.replace('.', "_"),
-            nonce
-        );
-
-        // Always attempt to remove the staging copy, including after adb push failures.
-        let remote_quoted = shell_quote(&remote_tmp)?;
-        let result = (|| -> Result<(), String> {
-            self.run_with_timeout(
-                &["-s", device_id, "push", &local_tmp_path, &remote_tmp],
-                Duration::from_secs(DB_IO_TIMEOUT_SECS),
-            )?;
-
-            // adb push commonly creates readable files; restrict staging as soon as possible.
-            let chmod_cmd = format!("chmod 600 -- {}", remote_quoted);
-            self.shell_with_timeout(
-                device_id,
-                &chmod_cmd,
-                Duration::from_secs(DEFAULT_TIMEOUT_SECS),
-            )?;
-
-            let inner_command = format!(
-                "umask 077; cp -- {} {} && chmod 600 -- {}",
-                remote_quoted,
-                shell_quote(relative_path)?,
+            .map_err(|e| e.to_string())?;
+        let staged = format!("{}.adbfly-stage-{}", relative_path, nonce);
+        validate_write_destination(&staged)?;
+        let transfer = (|| -> Result<(), String> {
+            self.stream_private_file(device_id, package, &staged, data)?;
+            let commit = format!(
+                "mv -f -- {} {}",
+                shell_quote(&staged)?,
                 shell_quote(relative_path)?
             );
-            let run_as_cmd = format!(
-                "run-as {} sh -c {}",
-                shell_quote(package)?,
-                shell_quote(&inner_command)?
-            );
-            self.shell_with_timeout(
-                device_id,
-                &run_as_cmd,
-                Duration::from_secs(DB_IO_TIMEOUT_SECS),
-            )?;
+            let run_as = format!("run-as {} sh -c {}", shell_quote(package)?, shell_quote(&commit)?);
+            self.shell_with_timeout(device_id, &run_as, Duration::from_secs(DB_IO_TIMEOUT_SECS))?;
             Ok(())
         })();
 
-        let cleanup_cmd = format!("rm -f -- {}", remote_quoted);
-        let cleanup = self.shell_with_timeout(
-            device_id,
-            &cleanup_cmd,
-            Duration::from_secs(DEFAULT_TIMEOUT_SECS),
-        );
-        if let Err(error) = cleanup {
-            return Err(format!("Remote staging cleanup failed ({}); transfer result: {:?}", error, result));
+        let cleanup = format!("run-as {} rm -f -- {}", shell_quote(package)?, shell_quote(&staged)?);
+        let cleanup_result = self.shell_with_timeout(device_id, &cleanup, Duration::from_secs(DEFAULT_TIMEOUT_SECS));
+        match (transfer, cleanup_result) {
+            (Err(error), _) => Err(error),
+            (Ok(()), Err(error)) => Err(format!("Database staging cleanup failed: {}", error)),
+            (Ok(()), Ok(_)) => Ok(()),
         }
-        result
-
-
     }
 
     pub fn delete_app_file_snapshot(
