@@ -333,11 +333,15 @@ impl AdbAdapter {
             shell_quote(&probe)?
         );
         let state = self.shell_with_timeout(
-            device_id, &run_as, Duration::from_secs(DEFAULT_TIMEOUT_SECS)
+            device_id,
+            &run_as,
+            Duration::from_secs(DEFAULT_TIMEOUT_SECS),
         )?;
         match state.trim() {
             "MISSING" => Ok(None),
-            "PRESENT" => self.pull_app_file_snapshot(device_id, package, relative_path).map(Some),
+            "PRESENT" => self
+                .pull_app_file_snapshot(device_id, package, relative_path)
+                .map(Some),
             _ => Err(format!("Unexpected Android file probe result: {}", state)),
         }
     }
