@@ -352,6 +352,16 @@ impl SqliteRepository {
             self.ensure_package_stopped(device_id, package_name)?;
         }
         let (_temp_dir, local_path) = self.pull_database(device_id, package_name, db_name)?;
+        // Preserve the exact source version so another app write cannot be
+        // overwritten while the snapshot is being edited on the host.
+        let original_db = std::fs::read(&local_path)
+            .map_err(|e| format!("Failed to read original DB snapshot: {}", e))?;
+        let original_wal_path = local_path.with_file_name(format!("{}-wal", db_name));
+        let original_wal = if original_wal_path.exists() {
+            Some(std::fs::read(&original_wal_path).map_err(|e| e.to_string())?)
+        } else {
+            None
+        };
         let conn = self.open_connection(&local_path, db_key)?;
 
         if is_select {
@@ -425,18 +435,26 @@ impl SqliteRepository {
         let local_db = std::fs::read(&local_path)
             .map_err(|e| format!("Failed to read modified database: {}", e))?;
         let remote_db = format!("databases/{}", db_name);
-        // Fail closed if the application reopened while the local copy was being edited.
+        // Force-stop marks the package stopped, preventing normal automatic
+        // restarts. The user should be warned in UI before initiating a write.
+        self.adb.shell(
+            device_id,
+            &format!("am force-stop {}", Self::quote_shell_arg(package_name)?),
+        )?;
         self.ensure_package_stopped(device_id, package_name)?;
-        self.adb
-            .push_app_file_snapshot(device_id, package_name, &remote_db, &local_db)?;
-
-        // WAL frames were checkpointed into the main DB above. Do not
-        // transmit the local -shm: it is a transient shared-memory index.
-        // Cleanup errors are not harmless: abort the operation visibly.
-        for suffix in ["-wal", "-shm"] {
-            let remote_sidecar = format!("{}{}", remote_db, suffix);
-            self.adb.delete_app_file_snapshot(device_id, package_name, &remote_sidecar)?;
+        let current_db = self.adb.pull_app_file_snapshot(device_id, package_name, &remote_db)?;
+        let current_wal = self.adb.pull_app_file_snapshot_optional(
+            device_id, package_name, &format!("{}-wal", remote_db),
+        )?;
+        if current_db != original_db || current_wal != original_wal {
+            return Err("Android database changed since editing began. No changes sent; reload and retry.".to_string());
         }
+
+        // The adapter performs verified app-private staging and retains remote
+        // backups during the replacement, with a rollback attempt on failure.
+        self.adb.replace_database_snapshot_with_recovery(
+            device_id, package_name, &remote_db, &local_db,
+        )?;
 
         Ok(SqlResult {
             success: true,
