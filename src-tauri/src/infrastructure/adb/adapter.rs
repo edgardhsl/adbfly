@@ -503,7 +503,7 @@ impl AdbAdapter {
         );
         let committed = run_private(&commit);
         let verification = match committed {
-            Ok(_) => {
+            Ok(_) => (|| -> Result<(), String> {
                 let remote_db = self.pull_app_file_snapshot(device_id, package, relative_db)?;
                 let remote_wal = self.pull_app_file_snapshot_optional(device_id, package, &wal)?;
                 if remote_db != data || remote_wal.is_some() {
@@ -511,7 +511,7 @@ impl AdbAdapter {
                 } else {
                     Ok(())
                 }
-            }
+            })(),
             Err(error) => Err(error),
         };
 
