@@ -123,7 +123,7 @@ Contribuições são bem-vindas! Leia [CONTRIBUTING.md](CONTRIBUTING.md) antes d
 
 ## Licença
 
-Licença MIT - veja o arquivo [LICENSE](LICENSE).
+Licenciado sob a GNU General Public License v3.0 (GPL-3.0). Consulte o arquivo [LICENSE](LICENSE).
 
 ---
 
