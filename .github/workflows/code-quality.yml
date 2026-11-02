@@ -33,6 +33,8 @@ jobs:
         run: npm run test:unit
       - name: Static production build
         run: npm run build
+      - name: Verify packaged inline-script CSP
+        run: npm run check:csp
 
   rust:
     runs-on: ubuntu-22.04
