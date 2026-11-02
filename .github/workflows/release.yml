@@ -1,6 +1,11 @@
 name: Release
 on:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing verified tag (vX.Y.Z)'
+        required: true
+        type: string
 
 jobs:
   release:
@@ -24,18 +29,18 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: '0'
+          ref: ${{ inputs.tag }}
 
-      - name: Get latest tag
-        id: get_tag
-        shell: bash
-        run: |
-          LATEST_TAG=$(git describe --tags --abbrev=0)
-          echo "tag=${LATEST_TAG}" >> $GITHUB_OUTPUT
+      - name: Verify release manifest versions
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: node scripts/check-release-version.cjs
 
       - name: setup node
         uses: actions/setup-node@v4
         with:
-          node-version: lts/*
+          node-version: 22
+          cache: npm
 
       - name: install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -48,17 +53,17 @@ jobs:
         # You can remove libayatana-appindicator3-dev if you don't use the system tray feature.
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
 
       - name: install frontend dependencies
-        run: npm install # change this to npm, pnpm or bun depending on which one you use.
+        run: npm ci
 
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ steps.get_tag.outputs.tag }}
-          releaseName: 'ADB Fly ${{ steps.get_tag.outputs.tag }}'
+          tagName: ${{ inputs.tag }}
+          releaseName: 'ADB Fly ${{ inputs.tag }}'
           releaseBody: 'See the assets to download this version and install.'
           releaseDraft: true
           prerelease: false
