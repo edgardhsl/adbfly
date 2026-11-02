@@ -99,9 +99,10 @@ impl DatabaseUseCases {
         db_name: &str,
         sql: &str,
         db_key: Option<&str>,
+        params: &[serde_json::Value],
     ) -> Result<SqlResult, String> {
         log::info!("Executing SQL on table: {}", db_name);
         self.repository
-            .execute_sql(device_id, package_name, db_name, sql, db_key)
+            .execute_sql(device_id, package_name, db_name, sql, db_key, params)
     }
 }
